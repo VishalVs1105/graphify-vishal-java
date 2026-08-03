@@ -205,6 +205,8 @@ def _write_java_interface_flow_graph(tmp_path):
         ("impl_method", ".getAddonDetailsByExternalIds()", "rcom-catalog-ds", "api/src/main/java/app/AddonServiceImpl.java", "L39"),
         ("repository_class", "BizCatalogRepository", "rcom-catalog-ds", "api/src/main/java/app/BizCatalogRepository.java", "L22"),
         ("repository_method", ".getProductOfferingByExternalIds()", "rcom-catalog-ds", "api/src/main/java/app/BizCatalogRepository.java", "L25"),
+        ("mapper_class", "AddonsMapper", "rcom-catalog-ds", "api/src/main/java/app/AddonsMapper.java", "L20"),
+        ("mapper_method", ".mapAddons()", "rcom-catalog-ds", "api/src/main/java/app/AddonsMapper.java", "L35"),
         ("catalog_controller", "SocController", "biz-catalog-service", "src/main/java/catalog/SocController.java", "L30"),
         ("catalog_controller_method", ".getProductOfferingByExternalIds()", "biz-catalog-service", "src/main/java/catalog/SocController.java", "L42"),
         ("catalog_service", "CatalogService", "biz-catalog-service", "src/main/java/catalog/CatalogService.java", "L10"),
@@ -236,6 +238,7 @@ def _write_java_interface_flow_graph(tmp_path):
         ("service_interface", "service_method"),
         ("service_impl", "impl_method"),
         ("repository_class", "repository_method"),
+        ("mapper_class", "mapper_method"),
         ("catalog_controller", "catalog_controller_method"),
         ("catalog_service", "catalog_service_method"),
         ("catalog_service_impl", "catalog_impl_method"),
@@ -257,6 +260,7 @@ def _write_java_interface_flow_graph(tmp_path):
     G.add_edge("controller_method", "service_method", relation="calls", confidence="INFERRED")
     G.add_edge("controller_method", "response_entity", relation="calls", confidence="EXTRACTED")
     G.add_edge("impl_method", "repository_method", relation="calls", confidence="INFERRED")
+    G.add_edge("impl_method", "mapper_method", relation="calls", confidence="INFERRED")
     G.add_edge(
         "catalog_controller_method", "catalog_service_method",
         relation="calls", confidence="INFERRED",
@@ -293,6 +297,9 @@ def test_query_cli_follows_java_interface_dispatch_and_omits_noise(
     assert "CatalogService.getProductOfferingByExternalIds() --dispatches_to" in out
     assert "CatalogServiceImpl.getProductOfferingByExternalIds() --calls" in out
     assert "CatalogSocRepository.findByExternalIds()" in out
+    assert out.index("CatalogSocRepository.findByExternalIds()") < out.index("AddonsMapper.mapAddons()")
+    assert "Recorded terminal points:" in out
+    assert "CatalogSocRepository.findByExternalIds() (repository/external boundary" in out
     assert "AddonControllerTest" not in out
     assert "ResponseEntity" not in out
 

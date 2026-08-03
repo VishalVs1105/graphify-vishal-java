@@ -1286,8 +1286,18 @@ def _render_java_call_flow(
     for src, tgt, data in call_records:
         outgoing.setdefault(src, []).append((tgt, data))
         incoming.setdefault(tgt, []).append((src, data))
+    def downstream_priority(item: tuple[str, dict]) -> tuple[int, int, int, str]:
+        target, data = item
+        target_edges = outgoing.get(target, [])
+        return (
+            0 if data.get("cross_service") else 1,
+            0 if any(edge.get("cross_service") for _next, edge in target_edges) else 1,
+            0 if data.get("relation") == "dispatches_to" else 1,
+            _java_flow_symbol(G, target, owners),
+        )
+
     for values in outgoing.values():
-        values.sort(key=lambda item: _java_flow_symbol(G, item[0], owners))
+        values.sort(key=downstream_priority)
     for values in incoming.values():
         values.sort(key=lambda item: _java_flow_symbol(G, item[0], owners))
 
@@ -1328,16 +1338,20 @@ def _render_java_call_flow(
         lines.append("  (none recorded in the graph)")
 
     lines.append("Downstream calls:")
-    queue: list[tuple[str, int, frozenset[str]]] = [(endpoint, 0, frozenset({endpoint}))]
     rendered = 0
     rendered_edges: set[tuple[str, str, str, str]] = set()
-    while queue:
-        src, depth, ancestors = queue.pop(0)
+    terminal_nodes: set[str] = set()
+
+    def walk_downstream(src: str, depth: int, ancestors: frozenset[str]) -> None:
+        nonlocal rendered
         if depth >= max_depth:
-            continue
+            terminal_nodes.add(src)
+            return
+        has_business_outgoing = False
         for tgt, data in outgoing.get(src, []):
             if not _java_flow_source(G, tgt):
                 continue
+            has_business_outgoing = True
             edge_key = (
                 src,
                 tgt,
@@ -1357,9 +1371,26 @@ def _render_java_call_flow(
                 f"{_java_flow_symbol(G, tgt, owners)}{at}"
             )
             if tgt not in ancestors:
-                queue.append((tgt, depth + 1, ancestors | {tgt}))
+                walk_downstream(tgt, depth + 1, ancestors | {tgt})
+        if not has_business_outgoing and src != endpoint:
+            terminal_nodes.add(src)
+
+    walk_downstream(endpoint, 0, frozenset({endpoint}))
     if not rendered:
         lines.append("  (none recorded in the graph)")
+    if terminal_nodes:
+        lines.append("Recorded terminal points:")
+        for node_id in sorted(terminal_nodes, key=lambda node: _java_flow_symbol(G, node, owners)):
+            owner_id = owners.get(node_id)
+            owner_label = str(G.nodes[owner_id].get("label") or "") if owner_id else ""
+            folded = owner_label.casefold()
+            if folded.endswith(("repository", "gateway", "client", "connector", "adapter")):
+                reason = "repository/external boundary; no further Java call recorded"
+            elif folded.endswith("service"):
+                reason = "unresolved service leaf; no implementation or downstream call recorded"
+            else:
+                reason = "no further production Java call recorded"
+            lines.append(f"  - {_java_flow_symbol(G, node_id, owners)} ({reason})")
     return _cut_lines_to_budget(
         lines,
         token_budget,
