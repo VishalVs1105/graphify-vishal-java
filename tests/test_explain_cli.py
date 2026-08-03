@@ -301,6 +301,16 @@ def test_explain_ambiguous_answer_does_not_depend_on_node_order(
            sorted(l.strip() for l in reverse.splitlines() if "metrics.port.ts" in l)
 
 
+def test_explain_accepts_exact_id_from_ambiguity_output(monkeypatch, tmp_path, capsys):
+    p = _write_ambiguous_graph(tmp_path)
+    out, code = _run_expect_exit(monkeypatch, p, "chat_metrics_port", capsys)
+
+    assert code is None
+    assert "Node: MetricsPort" in out
+    assert "ID:        chat_metrics_port" in out
+    assert "services/chat/src/application/ports/metrics.port.ts" in out
+
+
 def test_explain_matches_within_one_file_are_not_ambiguous(monkeypatch, tmp_path, capsys):
     """A file node plus its members is ordinary precedence, not a tie."""
     source_file = "services/chat/src/application/ports/metrics.port.ts"

@@ -53,6 +53,33 @@ def test_reverse_arrow(monkeypatch, tmp_path, capsys):
     assert "validateSanitySession() --calls [EXTRACTED]--> createPatchHandler()" not in out
 
 
+def test_path_accepts_exact_repo_qualified_node_ids(monkeypatch, tmp_path, capsys):
+    source_id = "checkout-service::src_main_java_sharedcontroller_sharedcontroller"
+    target_id = "payment-service::src_main_java_gateway_gateway"
+    graph_data = {
+        "directed": False,
+        "multigraph": False,
+        "graph": {"graphify_merged": True},
+        "nodes": [
+            {"id": source_id, "label": "SharedController", "source_file": "checkout/SharedController.java"},
+            {"id": "payment-service::src_main_java_sharedcontroller_sharedcontroller",
+             "label": "SharedController", "source_file": "payment/SharedController.java"},
+            {"id": target_id, "label": "Gateway", "source_file": "payment/Gateway.java"},
+        ],
+        "links": [{
+            "source": source_id,
+            "target": target_id,
+            "relation": "calls",
+            "confidence": "INFERRED",
+        }],
+    }
+    graph_path = tmp_path / "merged.json"
+    graph_path.write_text(json.dumps(graph_data), encoding="utf-8")
+
+    out = _run(monkeypatch, graph_path, source_id, target_id, capsys)
+    assert "SharedController --calls [INFERRED]--> Gateway" in out
+
+
 def _write_misranking_graph(tmp_path):
     """Graph where IDF scoring ranks a partial-token decoy above the full match.
 

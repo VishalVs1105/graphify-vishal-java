@@ -224,6 +224,24 @@ def test_find_node_resolves_when_label_and_norm_label_diverge():
     assert _find_node(G, "blockStream.ts") == ["n1"]
 
 
+def test_find_node_matches_exact_repo_qualified_node_id():
+    G = nx.Graph()
+    node_id = "checkout-service::src_main_java_paymentrequest_paymentrequest"
+    G.add_node(
+        node_id,
+        label="PaymentRequest",
+        source_file="src/main/java/PaymentRequest.java",
+    )
+    G.add_node(
+        "payment-service::src_main_java_paymentrequest_paymentrequest",
+        label="PaymentRequest",
+        source_file="src/main/java/PaymentRequest.java",
+    )
+
+    assert _find_node(G, node_id) == [node_id]
+    assert _score_nodes(G, [node_id])[0][1] == node_id
+
+
 # --- trigram candidate prefilter (the trigram index that shrinks the O(N) scan) ---
 
 

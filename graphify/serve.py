@@ -466,6 +466,11 @@ def _score_query(
     norm_terms = list(dict.fromkeys(tok for t in terms for tok in _search_tokens(t)))
     n_terms = len(norm_terms)
     idf = _compute_idf(G, norm_terms)
+    # Keep the caller's punctuation-preserving form as well as its tokenized
+    # form. Merged node IDs contain repo prefixes, ``::``, and underscores;
+    # tokenization turns those into spaces, so the documented "retry with the
+    # exact node ID" path could not actually select the pasted ID.
+    raw_query = " ".join(str(t).strip() for t in terms).strip().casefold()
     # Whole-query string for full-label matching (mirrors _find_node's `term`).
     joined = " ".join(norm_terms)
     # Weight the full-query bonus by the rarest constituent term so a specific
@@ -475,7 +480,12 @@ def _score_query(
     # back to the whole graph when the index isn't selective. The result is
     # identical either way — the per-node scoring below is unchanged and a
     # non-candidate node always scores 0. (IDF above stays a whole-graph statistic.)
-    candidate_ids = _trigram_candidates(G, norm_terms + ([joined] if joined else []))
+    candidate_ids = _trigram_candidates(
+        G,
+        norm_terms
+        + ([joined] if joined else [])
+        + ([raw_query] if raw_query and raw_query != joined else []),
+    )
     node_iter = (
         G.nodes(data=True) if candidate_ids is None
         else ((nid, G.nodes[nid]) for nid in candidate_ids)
@@ -513,7 +523,9 @@ def _score_query(
         # tier never fires, and every node sharing the token set ties -> arbitrary
         # node-id sort -> wrong/disconnected endpoint -> false "No path found".
         if joined:
-            if joined in (norm_label, bare_label, label_tokens, nid_lower):
+            if raw_query == nid_lower:
+                score += _EXACT_MATCH_BONUS * 100 * joined_w
+            elif joined in (norm_label, bare_label, label_tokens, nid_lower):
                 score += _EXACT_MATCH_BONUS * 10 * joined_w
             elif (
                 norm_label.startswith(joined)
@@ -1139,6 +1151,7 @@ def _find_node_tiers(
     # fragile if `label` and `norm_label` diverge. `norm_query` matches `norm_label`
     # symmetrically so an exactly-typed punctuated label always resolves (#1704).
     norm_query = _strip_diacritics(str(label)).lower().strip()
+    raw_query = str(label).strip().casefold()
     source_exact: list[str] = []
     exact: list[str] = []
     prefix: list[str] = []
@@ -1156,7 +1169,9 @@ def _find_node_tiers(
         label_tokens = " ".join(_search_tokens(d.get("label") or ""))
         source_tokens = " ".join(_search_tokens(d.get("source_file") or ""))
         nid_lower = nid.lower()
-        if term == source_tokens:
+        if raw_query == nid_lower:
+            exact.append(nid)
+        elif term == source_tokens:
             source_exact.append(nid)
         elif (
             term == norm_label or term == bare_label or term == label_tokens or term == nid_lower
