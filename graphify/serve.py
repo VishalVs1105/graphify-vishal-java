@@ -1094,6 +1094,297 @@ def _cut_lines_to_budget(lines: list[str], token_budget: int, narrow_hint: str) 
     )
 
 
+_JAVA_FLOW_INTENT_RE = re.compile(r"\b(?:api|endpoint|flow|trace|explain|mapping|route)\b", re.IGNORECASE)
+_JAVA_HTTP_PATH_RE = re.compile(r"(?<![\w:])(/[A-Za-z0-9._~!$&'()*+,;=:@%{}\-/]+)")
+_JAVA_QUALIFIED_METHOD_RE = re.compile(
+    r"\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)(?:\(\))?"
+)
+
+
+def _true_edge_records(G: nx.Graph):
+    """Yield persisted source->target direction for simple or multi graphs."""
+    if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)):
+        raw_edges = (
+            (u, v, data)
+            for u, v, _key, data in G.edges(keys=True, data=True)
+        )
+    else:
+        raw_edges = G.edges(data=True)
+    for u, v, data in raw_edges:
+        src = data.get("_src", u)
+        tgt = data.get("_tgt", v)
+        if {src, tgt} != {u, v}:
+            src, tgt = u, v
+        yield str(src), str(tgt), data
+
+
+def _java_method_owners(G: nx.Graph, records: list[tuple[str, str, dict]]) -> dict[str, str]:
+    owners: dict[str, str] = {}
+    for src, tgt, data in records:
+        if data.get("relation") == "method" and src in G and tgt in G:
+            owners.setdefault(tgt, src)
+    return owners
+
+
+def _java_flow_symbol(G: nx.Graph, node_id: str, owners: dict[str, str]) -> str:
+    data = G.nodes[node_id]
+    label = str(data.get("label") or node_id)
+    owner_id = owners.get(node_id)
+    if owner_id and label.startswith("."):
+        label = f"{G.nodes[owner_id].get('label', owner_id)}{label}"
+    repo = str(data.get("repo") or "").strip()
+    return f"[{repo}] {label}" if repo else label
+
+
+def _java_flow_source(G: nx.Graph, node_id: str) -> str:
+    data = G.nodes[node_id]
+    source = str(data.get("source_file") or "")
+    location = str(data.get("source_location") or "")
+    return f"{source}:{location}" if source and location else source
+
+
+def _mentioned_java_repos(G: nx.Graph, question: str) -> set[str]:
+    lowered = question.casefold()
+    spaced = re.sub(r"[-_]+", " ", lowered)
+    repos = {
+        str(data.get("repo"))
+        for _, data in G.nodes(data=True)
+        if data.get("repo")
+    }
+    return {
+        repo
+        for repo in repos
+        if repo.casefold() in lowered
+        or re.sub(r"[-_]+", " ", repo.casefold()) in spaced
+    }
+
+
+def _java_flow_edge_details(data: dict) -> str:
+    details = [str(data.get("confidence") or "UNKNOWN")]
+    strategy = data.get("bridge_strategy")
+    if strategy:
+        details.append(f"bridge={strategy}")
+    score = data.get("confidence_score")
+    if score is not None:
+        details.append(f"score={score}")
+    return "; ".join(details)
+
+
+def _java_flow_edge_source(data: dict) -> str:
+    source = str(data.get("source_file") or "")
+    location = str(data.get("source_location") or "")
+    return f"{source}:{location}" if source and location else source
+
+
+def _render_java_call_flow(
+    G: nx.Graph,
+    endpoint: str,
+    *,
+    title: str,
+    mapping: str | None,
+    token_budget: int,
+) -> str:
+    records = list(_true_edge_records(G))
+    owners = _java_method_owners(G, records)
+    call_records = [
+        (src, tgt, data)
+        for src, tgt, data in records
+        if data.get("relation") == "calls" and src in G and tgt in G
+    ]
+    lines = [title]
+    if mapping:
+        lines.append(f"Route: {mapping}")
+    lines.extend([
+        "Method mapping:",
+        f"  {_java_flow_symbol(G, endpoint, owners)}",
+        f"  Source: {_java_flow_source(G, endpoint) or '(no source location)'}",
+    ])
+
+    outgoing: dict[str, list[tuple[str, dict]]] = {}
+    incoming: dict[str, list[tuple[str, dict]]] = {}
+    for src, tgt, data in call_records:
+        outgoing.setdefault(src, []).append((tgt, data))
+        incoming.setdefault(tgt, []).append((src, data))
+    for values in outgoing.values():
+        values.sort(key=lambda item: _java_flow_symbol(G, item[0], owners))
+    for values in incoming.values():
+        values.sort(key=lambda item: _java_flow_symbol(G, item[0], owners))
+
+    lines.append("Upstream calls:")
+    upstream: list[tuple[int, str, str, dict]] = []
+    upstream_queue: list[tuple[str, int]] = [(endpoint, 0)]
+    upstream_seen = {endpoint}
+    while upstream_queue:
+        tgt, depth = upstream_queue.pop(0)
+        if depth >= 8:
+            continue
+        for src, data in incoming.get(tgt, []):
+            upstream.append((depth + 1, src, tgt, data))
+            if src not in upstream_seen:
+                upstream_seen.add(src)
+                upstream_queue.append((src, depth + 1))
+    upstream.sort(
+        key=lambda item: (
+            -item[0],
+            _java_flow_symbol(G, item[1], owners),
+            _java_flow_symbol(G, item[2], owners),
+        )
+    )
+    if upstream:
+        for number, (_depth, src, tgt, data) in enumerate(upstream, 1):
+            evidence = _java_flow_edge_source(data)
+            at = f" at={evidence}" if evidence else ""
+            lines.append(
+                f"  {number}. {_java_flow_symbol(G, src, owners)} --calls "
+                f"[{_java_flow_edge_details(data)}]--> "
+                f"{_java_flow_symbol(G, tgt, owners)}{at}"
+            )
+    else:
+        lines.append("  (none recorded in the graph)")
+
+    lines.append("Downstream calls:")
+    queue: list[tuple[str, int, frozenset[str]]] = [(endpoint, 0, frozenset({endpoint}))]
+    rendered = 0
+    while queue:
+        src, depth, ancestors = queue.pop(0)
+        if depth >= 8:
+            continue
+        for tgt, data in outgoing.get(src, []):
+            rendered += 1
+            evidence = _java_flow_edge_source(data)
+            at = f" at={evidence}" if evidence else ""
+            lines.append(
+                f"  {rendered}. {_java_flow_symbol(G, src, owners)} --calls "
+                f"[{_java_flow_edge_details(data)}]--> "
+                f"{_java_flow_symbol(G, tgt, owners)}{at}"
+            )
+            if tgt not in ancestors:
+                queue.append((tgt, depth + 1, ancestors | {tgt}))
+    if not rendered:
+        lines.append("  (none recorded in the graph)")
+    return _cut_lines_to_budget(
+        lines,
+        token_budget,
+        "Use the repository-qualified method or a larger --budget for more flow edges.",
+    )
+
+
+def _java_flow_ambiguity(
+    G: nx.Graph,
+    candidates: list[str],
+    *,
+    description: str,
+) -> str:
+    records = list(_true_edge_records(G))
+    owners = _java_method_owners(G, records)
+    lines = [f"AMBIGUOUS JAVA FLOW: {description} matches {len(candidates)} methods."]
+    for node_id in sorted(candidates, key=lambda n: (_java_flow_symbol(G, n, owners), n)):
+        lines.append(
+            f"  {_java_flow_symbol(G, node_id, owners)} "
+            f"at {_java_flow_source(G, node_id) or '(unknown source)'}"
+        )
+        lines.append(f"    id: {node_id}")
+    lines.append("Retry with the service/repository name or the exact node ID.")
+    return "\n".join(lines)
+
+
+def _try_java_flow_query(G: nx.Graph, question: str, token_budget: int) -> str | None:
+    """Return a deterministic Java route/method flow for explicit flow questions."""
+    if not _JAVA_FLOW_INTENT_RE.search(question):
+        return None
+    from graphify.bridges import _normalise_http_path
+
+    verb_match = re.search(
+        r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b",
+        question,
+        flags=re.IGNORECASE,
+    )
+    verb = verb_match.group(1).upper() if verb_match else None
+    path_match = _JAVA_HTTP_PATH_RE.search(question)
+    mentioned_repos = _mentioned_java_repos(G, question)
+
+    if path_match:
+        raw_path = path_match.group(1).rstrip(".,;!?)]}\"'")
+        wanted_path = _normalise_http_path(raw_path)
+        inbound: list[tuple[str, str, str]] = []
+        outbound: list[tuple[str, str, str]] = []
+        for node_id, data in G.nodes(data=True):
+            if mentioned_repos and str(data.get("repo") or "") not in mentioned_repos:
+                continue
+            metadata = data.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            role = str(metadata.get("java_http_role") or "").casefold()
+            routes = metadata.get("java_http_routes")
+            if role not in {"inbound", "outbound"} or not isinstance(routes, list):
+                continue
+            for route in routes:
+                if not isinstance(route, dict):
+                    continue
+                route_method = str(route.get("method") or "*").upper()
+                route_path = _normalise_http_path(route.get("path"))
+                if route_path != wanted_path:
+                    continue
+                if verb and route_method not in {verb, "*"}:
+                    continue
+                item = (str(node_id), route_method, str(route.get("path") or wanted_path))
+                (inbound if role == "inbound" else outbound).append(item)
+        candidates = inbound or outbound
+        description = f"{verb + ' ' if verb else ''}{raw_path}"
+        if not candidates:
+            repo_suffix = f" in {', '.join(sorted(mentioned_repos))}" if mentioned_repos else ""
+            return (
+                f"JAVA API FLOW NOT FOUND: no controller/client method maps "
+                f"{description}{repo_suffix}. Rebuild and re-merge the graph."
+            )
+        candidate_ids = list(dict.fromkeys(item[0] for item in candidates))
+        if len(candidate_ids) != 1:
+            return _java_flow_ambiguity(G, candidate_ids, description=description)
+        endpoint, route_method, route_path = candidates[0]
+        display_method = verb or route_method
+        return _render_java_call_flow(
+            G,
+            endpoint,
+            title="JAVA API FLOW",
+            mapping=f"{display_method} {route_path}",
+            token_budget=token_budget,
+        )
+
+    records = list(_true_edge_records(G))
+    owners = _java_method_owners(G, records)
+    for qualified in _JAVA_QUALIFIED_METHOD_RE.findall(question):
+        parts = qualified.split(".")
+        if len(parts) < 2:
+            continue
+        class_name, method_name = parts[-2], parts[-1]
+        if not class_name[:1].isupper():
+            continue
+        candidates = []
+        for node_id, owner_id in owners.items():
+            data = G.nodes[node_id]
+            owner = G.nodes[owner_id]
+            if str(owner.get("label") or "") != class_name:
+                continue
+            if str(data.get("label") or "").lstrip(".").removesuffix("()") != method_name:
+                continue
+            if mentioned_repos and str(data.get("repo") or "") not in mentioned_repos:
+                continue
+            candidates.append(node_id)
+        description = f"{class_name}.{method_name}()"
+        if len(candidates) > 1:
+            return _java_flow_ambiguity(G, candidates, description=description)
+        if len(candidates) == 1:
+            return _render_java_call_flow(
+                G,
+                candidates[0],
+                title="JAVA METHOD FLOW",
+                mapping=None,
+                token_budget=token_budget,
+            )
+        return f"JAVA METHOD FLOW NOT FOUND: {description} is not present in the graph."
+    return None
+
+
 def _query_graph_text(
     G: nx.Graph,
     question: str,
@@ -1103,6 +1394,9 @@ def _query_graph_text(
     token_budget: int = 2000,
     context_filters: list[str] | None = None,
 ) -> str:
+    java_flow = _try_java_flow_query(G, question, token_budget)
+    if java_flow is not None:
+        return java_flow
     terms = _query_terms(question)
     # One graph scoring pass produces both the combined ranking (used to drive
     # the gap-based seed selection below) and the per-token singleton winners

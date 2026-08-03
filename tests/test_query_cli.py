@@ -51,6 +51,149 @@ def test_query_cli_heuristic_context_filter(monkeypatch, tmp_path, capsys):
     assert "build" not in out
 
 
+def _write_java_api_flow_graph(tmp_path, *, duplicate_route: bool = False):
+    G = nx.Graph()
+    nodes = [
+        ("checkout_class", "CheckoutController", "checkout-service", "checkout/CheckoutController.java", "L10"),
+        ("checkout", ".checkout()", "checkout-service", "checkout/CheckoutController.java", "L20"),
+        ("order_class", "OrderService", "checkout-service", "checkout/OrderService.java", "L7"),
+        ("place_order", ".placeOrder()", "checkout-service", "checkout/OrderService.java", "L14"),
+        ("client_class", "PaymentClient", "checkout-service", "checkout/PaymentClient.java", "L9"),
+        ("client_charge", ".charge()", "checkout-service", "checkout/PaymentClient.java", "L11"),
+        ("controller_class", "PaymentController", "payment-service", "payment/PaymentController.java", "L11"),
+        ("controller_charge", ".charge()", "payment-service", "payment/PaymentController.java", "L20"),
+        ("processor_class", "PaymentProcessor", "payment-service", "payment/PaymentProcessor.java", "L7"),
+        ("process", ".process()", "payment-service", "payment/PaymentProcessor.java", "L14"),
+        ("stripe_class", "StripeGateway", "payment-service", "payment/StripeGateway.java", "L6"),
+        ("stripe_charge", ".charge()", "payment-service", "payment/StripeGateway.java", "L7"),
+    ]
+    for node_id, label, repo, source, location in nodes:
+        G.add_node(
+            node_id,
+            label=label,
+            repo=repo,
+            source_file=source,
+            source_location=location,
+        )
+    G.nodes["client_charge"]["metadata"] = {
+        "java_http_role": "outbound",
+        "java_http_routes": [{"method": "POST", "path": "/payments/charge"}],
+    }
+    G.nodes["controller_charge"]["metadata"] = {
+        "java_http_role": "inbound",
+        "java_http_routes": [{"method": "POST", "path": "/payments/charge"}],
+    }
+    for owner, method in (
+        ("checkout_class", "checkout"),
+        ("order_class", "place_order"),
+        ("client_class", "client_charge"),
+        ("controller_class", "controller_charge"),
+        ("processor_class", "process"),
+        ("stripe_class", "stripe_charge"),
+    ):
+        G.add_edge(owner, method, relation="method", confidence="EXTRACTED")
+    G.add_edge(
+        "checkout", "place_order",
+        relation="calls", confidence="INFERRED", confidence_score=0.8,
+    )
+    G.add_edge(
+        "place_order", "client_charge",
+        relation="calls", confidence="INFERRED", confidence_score=0.8,
+    )
+    G.add_edge(
+        "client_charge",
+        "controller_charge",
+        relation="calls",
+        confidence="INFERRED",
+        confidence_score=0.95,
+        bridge_strategy="java_http_route",
+        cross_service=True,
+    )
+    G.add_edge(
+        "controller_charge", "process",
+        relation="calls", confidence="INFERRED", confidence_score=0.8,
+    )
+    G.add_edge(
+        "process", "stripe_charge",
+        relation="calls", confidence="INFERRED", confidence_score=0.8,
+    )
+    if duplicate_route:
+        G.add_node(
+            "legacy_class", label="LegacyPaymentController", repo="legacy-service",
+            source_file="legacy/LegacyPaymentController.java", source_location="L10",
+        )
+        G.add_node(
+            "legacy_charge", label=".charge()", repo="legacy-service",
+            source_file="legacy/LegacyPaymentController.java", source_location="L20",
+            metadata={
+                "java_http_role": "inbound",
+                "java_http_routes": [{"method": "POST", "path": "/payments/charge"}],
+            },
+        )
+        G.add_edge("legacy_class", "legacy_charge", relation="method", confidence="EXTRACTED")
+    graph_path = tmp_path / "java-flow.json"
+    graph_path.write_text(json.dumps(json_graph.node_link_data(G, edges="links")))
+    return graph_path
+
+
+def test_query_cli_renders_deterministic_java_api_flow(monkeypatch, tmp_path, capsys):
+    graph_path = _write_java_api_flow_graph(tmp_path)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(mainmod.sys, "argv", [
+        "graphify", "query",
+        "Explain the complete flow of POST /payments/charge in payment-service",
+        "--graph", str(graph_path),
+    ])
+
+    mainmod.main()
+    out = capsys.readouterr().out
+    assert "JAVA API FLOW" in out
+    assert "Route: POST /payments/charge" in out
+    assert "[payment-service] PaymentController.charge()" in out
+    assert "Upstream calls:" in out
+    assert "[checkout-service] CheckoutController.checkout() --calls" in out
+    assert "[checkout-service] OrderService.placeOrder() --calls" in out
+    assert "[checkout-service] PaymentClient.charge() --calls" in out
+    assert "[payment-service] PaymentController.charge() --calls" in out
+    assert "[payment-service] PaymentProcessor.process()" in out
+    assert "[payment-service] StripeGateway.charge()" in out
+    assert "Traversal:" not in out
+
+
+def test_query_cli_renders_deterministic_java_method_flow(monkeypatch, tmp_path, capsys):
+    graph_path = _write_java_api_flow_graph(tmp_path)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(mainmod.sys, "argv", [
+        "graphify", "query",
+        "Explain the flow of PaymentProcessor.process in payment-service",
+        "--graph", str(graph_path),
+    ])
+
+    mainmod.main()
+    out = capsys.readouterr().out
+    assert "JAVA METHOD FLOW" in out
+    assert "Method mapping:" in out
+    assert "PaymentController.charge() --calls" in out
+    assert "PaymentProcessor.process() --calls" in out
+    assert "StripeGateway.charge()" in out
+
+
+def test_query_cli_requires_repo_when_http_route_is_ambiguous(monkeypatch, tmp_path, capsys):
+    graph_path = _write_java_api_flow_graph(tmp_path, duplicate_route=True)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(mainmod.sys, "argv", [
+        "graphify", "query", "Explain POST /payments/charge API flow",
+        "--graph", str(graph_path),
+    ])
+
+    mainmod.main()
+    out = capsys.readouterr().out
+    assert "AMBIGUOUS JAVA FLOW" in out
+    assert "[payment-service] PaymentController.charge()" in out
+    assert "[legacy-service] LegacyPaymentController.charge()" in out
+    assert "Retry with the service/repository name" in out
+
+
 def _write_calls_graph(tmp_path):
     """A single directed `calls` edge on an (on-disk) undirected graph.json,
 

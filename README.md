@@ -166,6 +166,18 @@ explicit commands are graph-only: the agent prefers a graph marked
 fall back to reading Java files. `/graphify query` by itself is incomplete; add
 the architecture question after `query`.
 
+API and method flow questions are route-aware and method-directed:
+
+```text
+/graphify query Explain the complete flow of POST /payments/charge in payment-service
+/graphify query Explain the flow of PaymentProcessor.process in payment-service
+```
+
+Graphify maps the exact Spring/Feign route to its controller method, shows the
+incoming cross-service bridge, and follows directed method calls downstream.
+When the same route or method exists in multiple services it returns an explicit
+ambiguity list instead of selecting one by score.
+
 ## Useful commands
 
 ```bash

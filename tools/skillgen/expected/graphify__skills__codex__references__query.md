@@ -16,3 +16,20 @@ and source locations. For an explicit `/graphify query`, `/graphify path`, or
 `/graphify explain`, do not read or search `.java` files as a fallback. If the
 command is missing its question/operands, ask for them. If no relevant evidence
 or path exists, say so and recommend rebuilding or re-merging the graph.
+
+For a Java API flow, include the HTTP verb, complete route, and service name:
+
+```text
+/graphify query Explain the complete flow of POST /payments/charge in payment-service
+```
+
+For a method flow, include `Class.method` and the service name:
+
+```text
+/graphify query Explain the flow of PaymentProcessor.process in payment-service
+```
+
+These queries return a deterministic `JAVA API FLOW` or `JAVA METHOD FLOW`
+section anchored on extracted Spring/Feign route metadata and directed `calls`
+edges. Present that section directly. If it reports ambiguity, ask for the
+service/repository or use one of the listed exact node IDs; do not guess.
