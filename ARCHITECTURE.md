@@ -21,17 +21,26 @@ agents.
 ## Multi-service flow
 
 Each service owns an independent `graphify-out/graph.json`. `graphify
-merge-graphs` namespaces nodes by repository, combines the graphs, and adds a
-directed cross-service edge when there is exactly one same-stem Java client and
-controller pair:
+merge-graphs` namespaces nodes by repository and combines the graphs. Java
+extraction persists Spring/Feign HTTP verb and route metadata on methods. Merge
+adds a directed cross-service edge when an outbound repository/client method
+has exactly one controller handler in another repository with the same verb and
+normalized route. Path-variable names are normalized:
+
+```text
+BizCatalogRepository.getAddon() -> AddonController.getAddon()
+```
+
+When route metadata is unavailable, merge falls back to exactly one same-stem
+Java client and controller pair:
 
 ```text
 PaymentClient -> PaymentController
 ```
 
 The merged graph is written to the workspace-root
-`graphify-out/graph.json`. Explicit bridge JSON is available when naming alone
-is insufficient; ambiguous endpoints fail instead of being guessed.
+`graphify-out/graph.json`. Explicit bridge JSON remains available for dynamic
+or constant-based routes; ambiguous endpoints fail instead of being guessed.
 
 ## Agent integration
 

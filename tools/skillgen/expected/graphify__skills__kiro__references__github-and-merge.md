@@ -23,8 +23,14 @@ graphify cluster-only .
 ```
 
 The default output is `graphify-out/graph.json`. Each node keeps its source
-repository. During merge, an unambiguous `*Client` class is connected to a
-same-stem `*Controller` in another service. For example:
+repository. During extraction, Graphify records Spring/Feign HTTP annotations.
+During merge, a unique outbound repository/client method is connected to the
+controller handler with the same HTTP verb and normalized route. Path-variable
+names do not need to match (`/soc/{id}` matches `/soc/{socId}`). This supports
+enterprise interfaces such as `BizCatalogRepository` without a manual bridge.
+
+As a fallback, an unambiguous `*Client` class is connected to a same-stem
+`*Controller` in another service. For example:
 
 ```text
 CheckoutController -> OrderService -> PaymentClient
@@ -32,10 +38,12 @@ PaymentClient -> PaymentController
 PaymentController -> PaymentProcessor -> StripeGateway
 ```
 
-The bridge edge is directed and marked `cross_service=true` with
+Route bridges are marked `cross_service=true` with
+`bridge_strategy=java_http_route`. Naming fallback bridges use
 `bridge_strategy=java_client_controller_name`.
 
-If naming does not match or endpoints are ambiguous, create a bridge contract:
+If annotations use constants that cannot be resolved statically or endpoints
+are ambiguous, create a bridge contract:
 
 ```json
 {

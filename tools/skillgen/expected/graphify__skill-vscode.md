@@ -48,9 +48,11 @@ services. Non-Java files are ignored automatically.
    graphify cluster-only .
    ```
 
-   `merge-graphs` writes `graphify-out/graph.json` by default. It automatically
-   links an unambiguous Java `*Client` to a same-stem `*Controller` in another
-   service, such as `PaymentClient -> PaymentController`.
+   `merge-graphs` writes `graphify-out/graph.json` by default. It first matches
+   unique outbound repository/client methods to controller handlers by HTTP
+   verb and normalized Spring/Feign route. It also links an unambiguous Java
+   `*Client` to a same-stem `*Controller`, such as
+   `PaymentClient -> PaymentController`.
 
 4. If automatic linking cannot identify a unique endpoint, use an explicit
    bridge contract as described in `references/github-and-merge.md`.

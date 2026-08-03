@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
+import re
 from graphify.extractors.base import _LANGUAGE_BUILTIN_GLOBALS, _file_stem, _make_id, _read_text
 from graphify.ids import normalize_id
 from graphify.extractors.models import LanguageConfig
@@ -572,6 +574,209 @@ def _java_annotation_names(declaration_node, source: bytes) -> list[str]:
             if text:
                 names.append(text)
     return names
+
+
+_JAVA_HTTP_METHOD_ANNOTATIONS = {
+    "getmapping": "GET",
+    "postmapping": "POST",
+    "putmapping": "PUT",
+    "deletemapping": "DELETE",
+    "patchmapping": "PATCH",
+    "getexchange": "GET",
+    "postexchange": "POST",
+    "putexchange": "PUT",
+    "deleteexchange": "DELETE",
+    "patchexchange": "PATCH",
+}
+_JAVA_HTTP_VERBS = frozenset({"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"})
+
+
+def _java_declaration_annotations(declaration_node) -> list[object]:
+    """Return Java annotation nodes attached directly to one declaration."""
+    for child in declaration_node.children:
+        if child.type == "modifiers":
+            return [
+                item
+                for item in child.children
+                if item.type in ("marker_annotation", "annotation")
+            ]
+    return []
+
+
+def _java_annotation_name(annotation, source: bytes) -> str:
+    name_node = annotation.child_by_field_name("name")
+    if name_node is None:
+        name_node = next(
+            (
+                child
+                for child in annotation.children
+                if child.type in ("identifier", "scoped_identifier", "type_identifier")
+            ),
+            None,
+        )
+    return (_read_text(name_node, source).rsplit(".", 1)[-1] if name_node else "").strip()
+
+
+def _java_string_literal(node, source: bytes) -> str:
+    raw = _read_text(node, source).strip()
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        value = raw[1:-1] if len(raw) >= 2 and raw[0] == raw[-1] == '"' else raw
+    return str(value)
+
+
+def _java_string_values(node, source: bytes) -> list[str]:
+    values: list[str] = []
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type == "string_literal":
+            values.append(_java_string_literal(current, source))
+            continue
+        stack.extend(reversed(current.children))
+    return values
+
+
+def _java_annotation_values(annotation, source: bytes) -> dict[str, list[str]]:
+    """Return string annotation arguments grouped by key; bare args use ``value``."""
+    arguments = annotation.child_by_field_name("arguments")
+    if arguments is None:
+        arguments = next(
+            (child for child in annotation.children if child.type == "annotation_argument_list"),
+            None,
+        )
+    result: dict[str, list[str]] = {}
+    if arguments is None:
+        return result
+    for child in arguments.children:
+        if not child.is_named:
+            continue
+        if child.type == "element_value_pair":
+            key_node = child.child_by_field_name("key")
+            value_node = child.child_by_field_name("value")
+            key = _read_text(key_node, source).strip() if key_node is not None else "value"
+            values = _java_string_values(value_node or child, source)
+        else:
+            key = "value"
+            values = _java_string_values(child, source)
+        if values:
+            result.setdefault(key, []).extend(values)
+    return result
+
+
+def _java_mapping_paths(values: dict[str, list[str]], *keys: str) -> list[str]:
+    paths: list[str] = []
+    for key in keys:
+        paths.extend(values.get(key, []))
+    return list(dict.fromkeys(path.strip() for path in paths if path.strip())) or [""]
+
+
+def _java_http_class_info(
+    declaration_node,
+    source: bytes,
+    *,
+    class_name: str,
+    declaration_type: str,
+) -> dict[str, object]:
+    """Extract controller/client role and base routes from a Java type."""
+    annotations = _java_declaration_annotations(declaration_node)
+    names = {_java_annotation_name(annotation, source).casefold() for annotation in annotations}
+    role = ""
+    if names & {"restcontroller", "controller"}:
+        role = "inbound"
+    elif names & {"feignclient", "registerrestclient"}:
+        role = "outbound"
+    elif declaration_type == "interface_declaration" and class_name.casefold().endswith(
+        ("client", "repository", "gateway", "connector", "adapter", "api")
+    ):
+        role = "outbound"
+
+    base_paths: list[str] = []
+    for annotation in annotations:
+        name = _java_annotation_name(annotation, source).casefold()
+        values = _java_annotation_values(annotation, source)
+        if name == "requestmapping":
+            base_paths.extend(_java_mapping_paths(values, "path", "value"))
+        elif name == "feignclient":
+            base_paths.extend(values.get("path", []))
+        elif name == "httpexchange":
+            base_paths.extend(_java_mapping_paths(values, "url", "value"))
+            if not role and declaration_type == "interface_declaration":
+                role = "outbound"
+    return {
+        "role": role,
+        "base_paths": list(dict.fromkeys(base_paths)) or [""],
+    }
+
+
+def _java_http_method_mappings(declaration_node, source: bytes) -> list[dict[str, str]]:
+    """Extract Spring/Feign HTTP verb and path pairs from one Java method."""
+    mappings: list[dict[str, str]] = []
+    for annotation in _java_declaration_annotations(declaration_node):
+        name = _java_annotation_name(annotation, source).casefold()
+        values = _java_annotation_values(annotation, source)
+        verb = _JAVA_HTTP_METHOD_ANNOTATIONS.get(name)
+        paths: list[str] = []
+        if verb:
+            paths = _java_mapping_paths(values, "path", "value", "url")
+        elif name == "requestmapping":
+            raw = _read_text(annotation, source)
+            verbs = list(dict.fromkeys(re.findall(
+                r"RequestMethod\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)",
+                raw,
+                flags=re.IGNORECASE,
+            )))
+            verbs = [item.upper() for item in verbs] or ["*"]
+            paths = _java_mapping_paths(values, "path", "value")
+            for request_verb in verbs:
+                for path in paths:
+                    mappings.append({"method": request_verb, "path": path})
+            continue
+        elif name == "requestline":
+            for request_line in values.get("value", []):
+                parts = request_line.strip().split(None, 1)
+                if parts and parts[0].upper() in _JAVA_HTTP_VERBS:
+                    mappings.append({
+                        "method": parts[0].upper(),
+                        "path": parts[1].strip() if len(parts) > 1 else "",
+                    })
+            continue
+        elif name == "httpexchange":
+            method_values = [value.upper() for value in values.get("method", [])]
+            verbs = [value for value in method_values if value in _JAVA_HTTP_VERBS] or ["*"]
+            paths = _java_mapping_paths(values, "url", "value")
+            for request_verb in verbs:
+                for path in paths:
+                    mappings.append({"method": request_verb, "path": path})
+            continue
+        if verb:
+            mappings.extend({"method": verb, "path": path} for path in paths)
+    return mappings
+
+
+def _join_java_http_path(base: str, route: str) -> str:
+    parts = [part.strip("/") for part in (base, route) if part and part.strip("/")]
+    return "/" + "/".join(parts) if parts else "/"
+
+
+def _java_http_method_metadata(
+    declaration_node,
+    source: bytes,
+    class_info: dict[str, object] | None,
+) -> dict[str, object]:
+    mappings = _java_http_method_mappings(declaration_node, source)
+    role = str((class_info or {}).get("role", ""))
+    if not mappings or not role:
+        return {}
+    bases = list((class_info or {}).get("base_paths", [""])) or [""]
+    routes = [
+        {"method": mapping["method"], "path": _join_java_http_path(str(base), mapping["path"])}
+        for base in bases
+        for mapping in mappings
+    ]
+    unique_routes = list({(item["method"], item["path"]): item for item in routes}.values())
+    return {"java_http_role": role, "java_http_routes": unique_routes}
 
 def _php_name_text(node, source: bytes) -> str | None:
     """Return the unqualified name text from a PHP `name`/`qualified_name` node."""
@@ -2370,6 +2575,7 @@ def _extract_generic(
     # while parameters and locals belong only to their declaring method.
     java_field_types: dict[str, dict[str, str]] = {}
     java_method_scopes: dict[int, tuple[object, str]] = {}
+    java_http_classes: dict[str, dict[str, object]] = {}
     # C# receiver typing is method-scoped too (#2299): class fields/properties
     # are shared, parameters and locals belong only to their declaring method —
     # the old file-wide table let one method's untypable rebinding poison a
@@ -2534,6 +2740,18 @@ def _extract_generic(
                 ):
                     metadata = dict(metadata or {})
                     metadata["is_partial"] = True
+            if config.ts_module == "tree_sitter_java":
+                java_http_info = _java_http_class_info(
+                    node,
+                    source,
+                    class_name=class_name,
+                    declaration_type=t,
+                )
+                java_http_classes[class_nid] = java_http_info
+                if java_http_info.get("role"):
+                    metadata = dict(metadata or {})
+                    metadata["java_http_role"] = java_http_info["role"]
+                    metadata["java_http_base_paths"] = java_http_info["base_paths"]
             add_node(class_nid, class_name, line, metadata=metadata)
             callable_def_nids.add(class_nid)  # a class is callable (constructor)
             callable_class_nids.add(class_nid)  # ...but only via its constructor (#2137)
@@ -3404,13 +3622,22 @@ def _extract_generic(
                 return
 
             line = node.start_point[0] + 1
+            func_metadata = None
+            if config.ts_module == "tree_sitter_java" and parent_class_nid:
+                java_method_metadata = _java_http_method_metadata(
+                    node,
+                    source,
+                    java_http_classes.get(parent_class_nid),
+                )
+                if java_method_metadata:
+                    func_metadata = java_method_metadata
             if parent_class_nid:
                 func_nid = _make_id(parent_class_nid, func_name)
-                add_node(func_nid, f".{func_name}()", line)
+                add_node(func_nid, f".{func_name}()", line, metadata=func_metadata)
                 add_edge(parent_class_nid, func_nid, "method", line)
             else:
                 func_nid = _make_id(stem, func_name)
-                add_node(func_nid, f"{func_name}()", line)
+                add_node(func_nid, f"{func_name}()", line, metadata=func_metadata)
                 add_edge(file_nid, func_nid, "contains", line)
             callable_def_nids.add(func_nid)  # function / method def is callable
             if config.ts_module == "tree_sitter_python":

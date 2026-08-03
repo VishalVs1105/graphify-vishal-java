@@ -25,9 +25,12 @@ graphify merge-graphs \
 ```
 
 The merge writes `graphify-out/graph.json` at the current workspace root.
-Graphify connects a unique same-stem client/controller pair across services,
-such as `PaymentClient -> PaymentController`. An explicit bridge contract can
-be supplied with `--bridges` when the code uses a different convention.
+Graphify first matches unique outbound repository/client methods to controller
+handlers using HTTP verb and normalized Spring/Feign route metadata. Variable
+names are ignored, so `/addons/{externalId}` matches `/addons/{id}`. When route
+metadata is unavailable, Graphify falls back to a unique same-stem
+client/controller pair such as `PaymentClient -> PaymentController`. An
+explicit bridge contract remains available for dynamic or ambiguous routes.
 
 GitHub Copilot and other installed agent skills use this merged graph for later
 questions:

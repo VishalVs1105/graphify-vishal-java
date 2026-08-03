@@ -106,3 +106,109 @@ def test_two_java_services_extract_merge_and_form_e2e_class_path(tmp_path: Path)
     bridge = next(link for link in data["links"] if link.get("cross_service"))
     assert bridge["source"] == chain_ids[2]
     assert bridge["target"] == chain_ids[3]
+
+
+def test_http_annotations_auto_bridge_repository_method_to_controller_handler(tmp_path: Path):
+    catalog_ds = tmp_path / "catalog-ds"
+    catalog_service = tmp_path / "biz-catalog-service"
+    catalog_ds.mkdir()
+    catalog_service.mkdir()
+
+    (catalog_ds / "BizCatalogRepository.java").write_text(
+        '''
+@FeignClient(name = "biz-catalog", path = "/api/catalog")
+interface BizCatalogRepository {
+    @GetMapping("/addons/{externalId}")
+    Object checkAddonsCompatibility(String externalId);
+}
+''',
+        encoding="utf-8",
+    )
+    (catalog_service / "AddonController.java").write_text(
+        '''
+@RestController
+@RequestMapping("/api/catalog")
+class AddonController {
+    @GetMapping(path = "/addons/{id}")
+    Object checkCompatibility(String id) { return null; }
+}
+''',
+        encoding="utf-8",
+    )
+
+    for service in (catalog_ds, catalog_service):
+        result = _run(["extract", str(service), "--no-cluster"], tmp_path)
+        assert result.returncode == 0, result.stderr
+
+    merged = _run([
+        "merge-graphs",
+        str(catalog_ds / "graphify-out" / "graph.json"),
+        str(catalog_service / "graphify-out" / "graph.json"),
+    ], tmp_path)
+    assert merged.returncode == 0, merged.stderr
+    assert "Java HTTP route bridge" in merged.stdout
+
+    data = json.loads((tmp_path / "graphify-out" / "graph.json").read_text(encoding="utf-8"))
+    node_by_id = {node["id"]: node for node in data["nodes"]}
+    route_bridges = [
+        link for link in data["links"]
+        if link.get("bridge_strategy") == "java_http_route"
+    ]
+    assert len(route_bridges) == 1
+    bridge = route_bridges[0]
+    assert node_by_id[bridge["source"]]["label"] == ".checkAddonsCompatibility()"
+    assert node_by_id[bridge["target"]]["label"] == ".checkCompatibility()"
+    assert bridge["http_method"] == "GET"
+    assert bridge["http_route"] == "/api/catalog/addons/{}"
+    assert bridge["confidence"] == "INFERRED"
+    assert bridge["confidence_score"] == 0.95
+
+
+def test_http_route_bridge_skips_ambiguous_controller_handlers(tmp_path: Path):
+    source = tmp_path / "catalog-ds"
+    target_a = tmp_path / "catalog-service-a"
+    target_b = tmp_path / "catalog-service-b"
+    for service in (source, target_a, target_b):
+        service.mkdir()
+
+    (source / "BizCatalogRepository.java").write_text(
+        '''
+@FeignClient(name = "catalog")
+interface BizCatalogRepository {
+    @RequestMapping(path = "/devices/{id}", method = RequestMethod.GET)
+    Object getDevice(String id);
+}
+''',
+        encoding="utf-8",
+    )
+    for directory, controller in (
+        (target_a, "DeviceController"),
+        (target_b, "LegacyDeviceController"),
+    ):
+        (directory / f"{controller}.java").write_text(
+            f'''
+@RestController
+class {controller} {{
+    @GetMapping("/devices/{{deviceId}}")
+    Object getDevice(String deviceId) {{ return null; }}
+}}
+''',
+            encoding="utf-8",
+        )
+
+    for service in (source, target_a, target_b):
+        result = _run(["extract", str(service), "--no-cluster"], tmp_path)
+        assert result.returncode == 0, result.stderr
+
+    merged = _run([
+        "merge-graphs",
+        str(source / "graphify-out" / "graph.json"),
+        str(target_a / "graphify-out" / "graph.json"),
+        str(target_b / "graphify-out" / "graph.json"),
+    ], tmp_path)
+    assert merged.returncode == 0, merged.stderr
+    data = json.loads((tmp_path / "graphify-out" / "graph.json").read_text(encoding="utf-8"))
+    assert not any(
+        link.get("bridge_strategy") == "java_http_route"
+        for link in data["links"]
+    )

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import html
 import json
+import re
 from pathlib import Path
 
 import networkx as nx
@@ -11,6 +13,7 @@ import networkx as nx
 _CONFIDENCES = {"EXTRACTED", "INFERRED", "AMBIGUOUS"}
 _JAVA_CLIENT_SUFFIX = "client"
 _JAVA_CONTROLLER_SUFFIX = "controller"
+_HTTP_PATH_VARIABLE_RE = re.compile(r"\{[^/{}]+\}")
 
 
 def _normalise_symbol(value: object) -> str:
@@ -123,6 +126,94 @@ def apply_bridge_contract(G: nx.Graph, bridges: list[dict], *, source_file: str)
             source_location=None,
             weight=1.0,
             cross_service=True,
+            _src=source,
+            _tgt=target,
+        )
+        added += 1
+    return added
+
+
+def _normalise_http_path(value: object) -> str:
+    path = html.unescape(str(value or "")).strip()
+    path = path.split("?", 1)[0].split("#", 1)[0]
+    path = re.sub(r"/+", "/", "/" + path.strip("/"))
+    path = _HTTP_PATH_VARIABLE_RE.sub("{}", path)
+    return path.rstrip("/") or "/"
+
+
+def _java_http_routes(data: dict) -> tuple[str, list[tuple[str, str]]]:
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return "", []
+    role = str(metadata.get("java_http_role", "")).strip().casefold()
+    raw_routes = metadata.get("java_http_routes")
+    if role not in {"inbound", "outbound"} or not isinstance(raw_routes, list):
+        return "", []
+    routes: list[tuple[str, str]] = []
+    for raw in raw_routes:
+        if not isinstance(raw, dict):
+            continue
+        method = str(raw.get("method", "*")).strip().upper() or "*"
+        path = _normalise_http_path(raw.get("path"))
+        routes.append((method, path))
+    return role, list(dict.fromkeys(routes))
+
+
+def infer_java_http_route_bridges(G: nx.Graph) -> int:
+    """Link unique outbound Java HTTP methods to matching controller handlers.
+
+    Matching is deterministic and local: both nodes must carry Java annotation
+    metadata extracted from source, their normalized paths must match, HTTP verbs
+    must agree (``RequestMapping`` without a method is a wildcard), and the target
+    must be unique in another repository. Path-variable names are deliberately
+    ignored, so ``/soc/{id}`` and ``/soc/{socId}`` describe the same endpoint.
+    """
+    inbound_by_path: dict[str, list[tuple[str, str, str]]] = {}
+    outbound: list[tuple[str, str, list[tuple[str, str]]]] = []
+    for node_id, data in G.nodes(data=True):
+        repo = str(data.get("repo", "")).strip()
+        if not repo:
+            continue
+        role, routes = _java_http_routes(data)
+        if role == "inbound":
+            for method, path in routes:
+                inbound_by_path.setdefault(path, []).append((str(node_id), repo, method))
+        elif role == "outbound":
+            outbound.append((str(node_id), repo, routes))
+
+    added = 0
+    for source, source_repo, routes in outbound:
+        candidates: dict[str, tuple[str, str]] = {}
+        for source_method, path in routes:
+            for target, target_repo, target_method in inbound_by_path.get(path, []):
+                if target_repo == source_repo:
+                    continue
+                if (
+                    source_method != "*"
+                    and target_method != "*"
+                    and source_method != target_method
+                ):
+                    continue
+                method = source_method if source_method != "*" else target_method
+                candidates[target] = (method, path)
+        if len(candidates) != 1:
+            continue
+        target, (method, path) = next(iter(candidates.items()))
+        if G.has_edge(source, target):
+            continue
+        G.add_edge(
+            source,
+            target,
+            relation="calls",
+            confidence="INFERRED",
+            confidence_score=0.95,
+            source_file="graphify:auto-java-http-route-bridge",
+            source_location=None,
+            weight=1.0,
+            cross_service=True,
+            bridge_strategy="java_http_route",
+            http_method=method,
+            http_route=path,
             _src=source,
             _tgt=target,
         )

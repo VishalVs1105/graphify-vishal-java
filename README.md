@@ -71,8 +71,15 @@ only one service.
 
 ### Automatic service boundaries
 
-During merge, Graphify connects a unique outbound `*Client` type to a same-stem
-`*Controller` type in another repository. For example:
+Graphify extracts Spring and Feign HTTP mappings from Java type and method
+annotations. During merge it connects a unique outbound repository/client
+method to the controller handler with the same HTTP verb and normalized route.
+For example, `GET /catalog/addons/{externalId}` matches
+`GET /catalog/addons/{id}`. This works for enterprise interfaces such as
+`BizCatalogRepository` without a manual bridge.
+
+When route metadata is unavailable, Graphify also connects a unique outbound
+`*Client` type to a same-stem `*Controller` type in another repository:
 
 ```text
 checkout-service
@@ -83,7 +90,21 @@ payment-service
 PaymentController → PaymentProcessor → StripeGateway
 ```
 
-The inferred network-hop edge contains:
+An annotation-matched network-hop edge contains:
+
+```json
+{
+  "relation": "calls",
+  "confidence": "INFERRED",
+  "confidence_score": 0.95,
+  "cross_service": true,
+  "bridge_strategy": "java_http_route",
+  "http_method": "GET",
+  "http_route": "/catalog/addons/{}"
+}
+```
+
+The naming fallback edge contains:
 
 ```json
 {
@@ -95,8 +116,9 @@ The inferred network-hop edge contains:
 }
 ```
 
-Graphify adds the edge only when the controller match is unique. It does not
-guess when multiple services expose the same controller name.
+Graphify adds an automatic edge only when the controller handler or naming
+fallback is unique. It does not guess when multiple services expose the same
+HTTP route or controller name.
 
 For nonstandard naming, an optional explicit bridge remains available:
 

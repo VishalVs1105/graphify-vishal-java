@@ -22,8 +22,10 @@ graphify cluster-only .
 ```
 
 The merged graph is `graphify-out/graph.json`. Graphify automatically links a
-unique same-stem `*Client` in one service to a `*Controller` in another. Use
-`--bridges <file.json>` only when an explicit fallback is needed.
+unique outbound repository/client method to a controller handler by HTTP verb
+and normalized Spring/Feign route, then falls back to a unique same-stem
+`*Client`/`*Controller` pair. Use `--bridges <file.json>` only for unresolved
+dynamic routes or an explicit fallback.
 
 When the graph exists, answer codebase questions by running `graphify query
 "<question>"`; do not rebuild individual services. Use `graphify path` for a

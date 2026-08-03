@@ -2189,8 +2189,9 @@ def dispatch_command(cmd: str) -> None:
             merged = _nx.compose(merged, prefixed)
         merged.graph["graphify_merged"] = True
         merged.graph["repos"] = repo_tags
-        from graphify.bridges import infer_java_service_bridges
-        auto_bridges_added = infer_java_service_bridges(merged)
+        from graphify.bridges import infer_java_http_route_bridges, infer_java_service_bridges
+        route_bridges_added = infer_java_http_route_bridges(merged)
+        name_bridges_added = infer_java_service_bridges(merged)
         bridges_added = 0
         if bridges_path is not None:
             from graphify.bridges import apply_bridge_contract, load_bridge_contract
@@ -2219,8 +2220,10 @@ def dispatch_command(cmd: str) -> None:
         from graphify.paths import write_json_atomic as _wja
         _wja(out_path, out_data, indent=2)
         print(f"Merged {len(graphs)} graphs -> {merged.number_of_nodes()} nodes, {merged.number_of_edges()} edges")
-        if auto_bridges_added:
-            print(f"Added {auto_bridges_added} inferred Java Client-to-Controller bridge relationship(s)")
+        if route_bridges_added:
+            print(f"Added {route_bridges_added} inferred Java HTTP route bridge relationship(s)")
+        if name_bridges_added:
+            print(f"Added {name_bridges_added} inferred Java Client-to-Controller bridge relationship(s)")
         if bridges_path is not None:
             print(f"Added {bridges_added} cross-service bridge relationship(s) from {bridges_path}")
         print(f"Written to: {out_path}")
