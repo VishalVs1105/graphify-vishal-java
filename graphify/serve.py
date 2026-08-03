@@ -1337,60 +1337,140 @@ def _render_java_call_flow(
     else:
         lines.append("  (none recorded in the graph)")
 
-    lines.append("Downstream calls:")
-    rendered = 0
-    rendered_edges: set[tuple[str, str, str, str]] = set()
-    terminal_nodes: set[str] = set()
+    def edge_key(src: str, tgt: str, data: dict) -> tuple[str, str, str, str]:
+        return (
+            src,
+            tgt,
+            str(data.get("relation") or "calls"),
+            str(data.get("bridge_strategy") or ""),
+        )
 
-    def walk_downstream(src: str, depth: int, ancestors: frozenset[str]) -> None:
-        nonlocal rendered
-        if depth >= max_depth:
-            terminal_nodes.add(src)
-            return
-        has_business_outgoing = False
-        for tgt, data in outgoing.get(src, []):
-            if not _java_flow_source(G, tgt):
-                continue
-            has_business_outgoing = True
-            edge_key = (
-                src,
-                tgt,
-                str(data.get("relation") or "calls"),
-                str(data.get("bridge_strategy") or ""),
-            )
-            if edge_key in rendered_edges:
-                continue
-            rendered_edges.add(edge_key)
-            rendered += 1
+    def owner_label(node_id: str) -> str:
+        owner_id = owners.get(node_id)
+        return str(G.nodes[owner_id].get("label") or "") if owner_id else ""
+
+    def is_internal_detail(node_id: str) -> bool:
+        folded = owner_label(node_id).casefold()
+        return folded.endswith((
+            "mapper", "util", "utils", "helper", "builder", "converter", "factory",
+        ))
+
+    cross_reachable = {
+        source
+        for source, targets in outgoing.items()
+        if any(data.get("cross_service") for _target, data in targets)
+    }
+    cross_queue = list(cross_reachable)
+    while cross_queue:
+        target = cross_queue.pop()
+        for source, _data in incoming.get(target, []):
+            if source not in cross_reachable and _java_flow_source(G, source):
+                cross_reachable.add(source)
+                cross_queue.append(source)
+
+    def primary_candidates(src: str, ancestors: frozenset[str]) -> list[tuple[str, dict]]:
+        candidates = [
+            (target, data)
+            for target, data in outgoing.get(src, [])
+            if target not in ancestors and _java_flow_source(G, target)
+        ]
+        candidates.sort(key=lambda item: (
+            0
+            if item[1].get("cross_service")
+            or item[0] in cross_reachable
+            else 1,
+            1 if is_internal_detail(item[0]) else 0,
+            0 if item[1].get("relation") == "dispatches_to" else 1,
+            _java_flow_symbol(G, item[0], owners),
+        ))
+        return candidates
+
+    primary_edges: list[tuple[str, str, dict]] = []
+    primary_nodes = [endpoint]
+    ancestors = frozenset({endpoint})
+    current = endpoint
+    for _depth in range(max_depth):
+        candidates = primary_candidates(current, ancestors)
+        if not candidates:
+            break
+        target, data = candidates[0]
+        primary_edges.append((current, target, data))
+        primary_nodes.append(target)
+        ancestors |= {target}
+        current = target
+
+    lines.append("Primary end-to-end path:")
+    if primary_edges:
+        for number, (src, tgt, data) in enumerate(primary_edges, 1):
             evidence = _java_flow_edge_source(data)
             at = f" at={evidence}" if evidence else ""
             relation = str(data.get("relation") or "calls")
             lines.append(
-                f"  {rendered}. {_java_flow_symbol(G, src, owners)} --{relation} "
+                f"  {number}. {_java_flow_symbol(G, src, owners)} --{relation} "
                 f"[{_java_flow_edge_details(data)}]--> "
                 f"{_java_flow_symbol(G, tgt, owners)}{at}"
             )
-            if tgt not in ancestors:
-                walk_downstream(tgt, depth + 1, ancestors | {tgt})
-        if not has_business_outgoing and src != endpoint:
-            terminal_nodes.add(src)
-
-    walk_downstream(endpoint, 0, frozenset({endpoint}))
-    if not rendered:
+    else:
         lines.append("  (none recorded in the graph)")
-    if terminal_nodes:
-        lines.append("Recorded terminal points:")
-        for node_id in sorted(terminal_nodes, key=lambda node: _java_flow_symbol(G, node, owners)):
-            owner_id = owners.get(node_id)
-            owner_label = str(G.nodes[owner_id].get("label") or "") if owner_id else ""
-            folded = owner_label.casefold()
-            if folded.endswith(("repository", "gateway", "client", "connector", "adapter")):
-                reason = "repository/external boundary; no further Java call recorded"
-            elif folded.endswith("service"):
-                reason = "unresolved service leaf; no implementation or downstream call recorded"
-            else:
-                reason = "no further production Java call recorded"
-            lines.append(f"  - {_java_flow_symbol(G, node_id, owners)} ({reason})")
+
+    primary_keys = {edge_key(src, tgt, data) for src, tgt, data in primary_edges}
+    supporting: list[str] = []
+    supporting_seen: set[tuple[str, str, str, str]] = set()
+    for primary_node in primary_nodes:
+        for target, data in outgoing.get(primary_node, []):
+            first_key = edge_key(primary_node, target, data)
+            if (
+                first_key in primary_keys
+                or first_key in supporting_seen
+                or not _java_flow_source(G, target)
+            ):
+                continue
+            supporting_seen.add(first_key)
+            branch = [primary_node, target]
+            collapsed = is_internal_detail(target)
+            branch_ancestors = frozenset(branch)
+            branch_current = target
+            for _depth in range(max_depth - 1):
+                if collapsed:
+                    break
+                candidates = primary_candidates(branch_current, branch_ancestors)
+                if not candidates:
+                    break
+                next_target, next_data = candidates[0]
+                next_key = edge_key(branch_current, next_target, next_data)
+                if next_key in primary_keys or next_key in supporting_seen:
+                    break
+                supporting_seen.add(next_key)
+                branch.append(next_target)
+                branch_ancestors |= {next_target}
+                branch_current = next_target
+                collapsed = is_internal_detail(next_target)
+            rendered_branch = " -> ".join(
+                _java_flow_symbol(G, node_id, owners) for node_id in branch
+            )
+            if collapsed:
+                rendered_branch += " (mapper/helper internals collapsed)"
+            supporting.append(rendered_branch)
+
+    if supporting:
+        lines.append("Supporting branches:")
+        for number, branch in enumerate(supporting[:12], 1):
+            lines.append(f"  {number}. {branch}")
+        if len(supporting) > 12:
+            lines.append(f"  ... {len(supporting) - 12} additional branch(es) omitted")
+
+    if primary_nodes and primary_nodes[-1] != endpoint:
+        terminal = primary_nodes[-1]
+        folded = owner_label(terminal).casefold()
+        if folded.endswith(("repository", "gateway", "client", "connector", "adapter")):
+            reason = "repository/external boundary; no further Java call recorded"
+        elif folded.endswith(("service", "serviceimpl")):
+            reason = "unresolved service leaf; no implementation or downstream call recorded"
+        else:
+            reason = "no further production Java call recorded"
+        lines.append(
+            f"Primary terminal: {_java_flow_symbol(G, terminal, owners)} ({reason})"
+        )
     return _cut_lines_to_budget(
         lines,
         token_budget,

@@ -83,8 +83,9 @@ exact, unique method-name match between the outbound repository/client and a
 controller in another service. Generic or ambiguous method names are never
 guessed. The API-flow query then continues from that controller through service
 interfaces, implementations, repositories, and gateways until the recorded
-call chain ends. Cross-service paths are rendered contiguously before secondary
-mapper/content branches, and recorded terminal repositories are labeled.
+call chain ends. The query renders one concise primary E2E path, summarizes
+supporting branches, collapses mapper/helper internals, and labels the primary
+terminal repository.
 
 When route metadata is unavailable, Graphify also connects a unique outbound
 `*Client` type to a same-stem `*Controller` type in another repository:

@@ -207,6 +207,13 @@ def _write_java_interface_flow_graph(tmp_path):
         ("repository_method", ".getProductOfferingByExternalIds()", "rcom-catalog-ds", "api/src/main/java/app/BizCatalogRepository.java", "L25"),
         ("mapper_class", "AddonsMapper", "rcom-catalog-ds", "api/src/main/java/app/AddonsMapper.java", "L20"),
         ("mapper_method", ".mapAddons()", "rcom-catalog-ds", "api/src/main/java/app/AddonsMapper.java", "L35"),
+        ("content_helper", ".getContentfulMap()", "rcom-catalog-ds", "api/src/main/java/app/AddonServiceImpl.java", "L77"),
+        ("content_service", "ContentfulService", "rcom-catalog-ds", "api/src/main/java/app/ContentfulService.java", "L10"),
+        ("content_service_method", ".getContentByResource()", "rcom-catalog-ds", "api/src/main/java/app/ContentfulService.java", "L14"),
+        ("content_impl", "ContentfulServiceImpl", "rcom-catalog-ds", "api/src/main/java/app/ContentfulServiceImpl.java", "L20"),
+        ("content_impl_method", ".getContentByResource()", "rcom-catalog-ds", "api/src/main/java/app/ContentfulServiceImpl.java", "L42"),
+        ("content_repository", "ContentfulRepository", "rcom-catalog-ds", "api/src/main/java/app/ContentfulRepository.java", "L12"),
+        ("content_repository_method", ".getContentfulResource()", "rcom-catalog-ds", "api/src/main/java/app/ContentfulRepository.java", "L18"),
         ("catalog_controller", "SocController", "biz-catalog-service", "src/main/java/catalog/SocController.java", "L30"),
         ("catalog_controller_method", ".getProductOfferingByExternalIds()", "biz-catalog-service", "src/main/java/catalog/SocController.java", "L42"),
         ("catalog_service", "CatalogService", "biz-catalog-service", "src/main/java/catalog/CatalogService.java", "L10"),
@@ -237,8 +244,12 @@ def _write_java_interface_flow_graph(tmp_path):
         ("controller_class", "controller_method"),
         ("service_interface", "service_method"),
         ("service_impl", "impl_method"),
+        ("service_impl", "content_helper"),
         ("repository_class", "repository_method"),
         ("mapper_class", "mapper_method"),
+        ("content_service", "content_service_method"),
+        ("content_impl", "content_impl_method"),
+        ("content_repository", "content_repository_method"),
         ("catalog_controller", "catalog_controller_method"),
         ("catalog_service", "catalog_service_method"),
         ("catalog_service_impl", "catalog_impl_method"),
@@ -256,10 +267,21 @@ def _write_java_interface_flow_graph(tmp_path):
         relation="implements", confidence="EXTRACTED",
         _src="catalog_service_impl", _tgt="catalog_service",
     )
+    G.add_edge(
+        "content_impl", "content_service",
+        relation="implements", confidence="EXTRACTED",
+        _src="content_impl", _tgt="content_service",
+    )
     G.add_edge("test_method", "controller_method", relation="calls", confidence="INFERRED")
     G.add_edge("controller_method", "service_method", relation="calls", confidence="INFERRED")
     G.add_edge("controller_method", "response_entity", relation="calls", confidence="EXTRACTED")
     G.add_edge("impl_method", "repository_method", relation="calls", confidence="INFERRED")
+    G.add_edge("impl_method", "content_helper", relation="calls", confidence="EXTRACTED")
+    G.add_edge("content_helper", "content_service_method", relation="calls", confidence="INFERRED")
+    G.add_edge(
+        "content_impl_method", "content_repository_method",
+        relation="calls", confidence="INFERRED",
+    )
     G.add_edge("impl_method", "mapper_method", relation="calls", confidence="INFERRED")
     G.add_edge(
         "catalog_controller_method", "catalog_service_method",
@@ -298,7 +320,13 @@ def test_query_cli_follows_java_interface_dispatch_and_omits_noise(
     assert "CatalogServiceImpl.getProductOfferingByExternalIds() --calls" in out
     assert "CatalogSocRepository.findByExternalIds()" in out
     assert out.index("CatalogSocRepository.findByExternalIds()") < out.index("AddonsMapper.mapAddons()")
-    assert "Recorded terminal points:" in out
+    assert "Primary end-to-end path:" in out
+    assert "Supporting branches:" in out
+    assert "mapper/helper internals collapsed" in out
+    assert "ContentfulService.getContentByResource()" in out
+    assert "ContentfulServiceImpl.getContentByResource()" in out
+    assert "ContentfulRepository.getContentfulResource()" in out
+    assert "Primary terminal:" in out
     assert "CatalogSocRepository.findByExternalIds() (repository/external boundary" in out
     assert "AddonControllerTest" not in out
     assert "ResponseEntity" not in out

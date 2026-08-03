@@ -35,8 +35,9 @@ edges. The flow follows an interface call into its Java implementation when the
 graph contains an `implements` relationship. Test callers and source-less
 framework wrappers are omitted from the production business flow. A unique
 repository/client-to-controller bridge continues the flow into the downstream
-service. Cross-service chains are presented before secondary branches, followed
-by recorded terminal points. A repository/external terminal means the graph has
-no further Java call; an unresolved service leaf means implementation evidence
-is missing. Present that section directly. If it reports ambiguity, ask for the
-service/repository or use one of the listed exact node IDs; do not guess.
+service. The result presents one primary E2E path, concise supporting branches,
+and one primary terminal; mapper/helper internals are collapsed. A
+repository/external terminal means the graph has no further Java call; an
+unresolved service leaf means implementation evidence is missing. Present that
+section directly. If it reports ambiguity, ask for the service/repository or use
+one of the listed exact node IDs; do not guess.
