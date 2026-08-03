@@ -210,7 +210,7 @@ def test_extract_writes_to_graphify_out_env(tmp_path):
     """#1423: `graphify extract` honours GRAPHIFY_OUT for where it WRITES, not only
     where readers look — previously it hardcoded graphify-out/ and ignored the
     override. Code-only corpus, so no LLM backend is needed."""
-    (tmp_path / "m.py").write_text("def a():\n    return b()\n\n\ndef b():\n    return 1\n")
+    (tmp_path / "M.java").write_text("class M { void b() {} void a() { b(); } }\n")
     env = os.environ.copy()
     env["GRAPHIFY_OUT"] = "custom-out"
 
@@ -223,7 +223,7 @@ def test_extract_writes_to_graphify_out_env(tmp_path):
     assert not (tmp_path / "graphify-out").exists(), "extract ignored GRAPHIFY_OUT and wrote graphify-out/"
     # Manifest keys are relative to the scan root (portable) — #1417.
     keys = list(json.loads((tmp_path / "custom-out" / "manifest.json").read_text()).keys())
-    assert keys == ["m.py"], keys
+    assert keys == ["M.java"], keys
 
 
 # ── graphify path ────────────────────────────────────────────────────────────
@@ -285,8 +285,8 @@ def test_export_unknown_format_fails(tmp_path):
 
 
 def test_update_no_cluster_writes_raw_graph(tmp_path):
-    src = tmp_path / "sample.py"
-    src.write_text("def f():\n    return 1\n", encoding="utf-8")
+    src = tmp_path / "Sample.java"
+    src.write_text("class Sample { void f() {} }\n", encoding="utf-8")
 
     r = _run(["update", ".", "--no-cluster"], tmp_path)
     assert r.returncode == 0, r.stderr

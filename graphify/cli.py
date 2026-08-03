@@ -2094,20 +2094,34 @@ def dispatch_command(cmd: str) -> None:
 
     elif cmd == "merge-graphs":
         # graphify merge-graphs graph1.json graph2.json ... --out merged.json
+        #                        [--bridges e2e-bridges.json]
         args = sys.argv[2:]
         graph_paths: list[Path] = []
-        out_path = Path(_GRAPHIFY_OUT) / "merged-graph.json"
+        # The normal graph location lets the graph-first agent fast path reuse
+        # the merged multi-service graph on the next /graphify invocation.
+        out_path = Path(_GRAPHIFY_OUT) / "graph.json"
+        bridges_path: Path | None = None
         i = 0
         while i < len(args):
             if args[i] == "--out" and i + 1 < len(args):
                 out_path = Path(args[i + 1])
                 i += 2
+            elif args[i] == "--bridges" and i + 1 < len(args):
+                bridges_path = Path(args[i + 1])
+                i += 2
+            elif args[i].startswith("--bridges="):
+                bridges_path = Path(args[i].split("=", 1)[1])
+                i += 1
+            elif args[i].startswith("-"):
+                print(f"error: unknown merge-graphs option: {args[i]}", file=sys.stderr)
+                sys.exit(2)
             else:
                 graph_paths.append(Path(args[i]))
                 i += 1
         if len(graph_paths) < 2:
             print(
-                "Usage: graphify merge-graphs <graph1.json> <graph2.json> [...] [--out merged.json]",
+                "Usage: graphify merge-graphs <graph1.json> <graph2.json> [...] "
+                "[--out merged.json] [--bridges e2e-bridges.json]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -2173,6 +2187,23 @@ def dispatch_command(cmd: str) -> None:
         for G, repo_tag in zip(graphs, repo_tags):
             prefixed = _to_simple(_prefix(G, repo_tag))
             merged = _nx.compose(merged, prefixed)
+        merged.graph["graphify_merged"] = True
+        merged.graph["repos"] = repo_tags
+        from graphify.bridges import infer_java_service_bridges
+        auto_bridges_added = infer_java_service_bridges(merged)
+        bridges_added = 0
+        if bridges_path is not None:
+            from graphify.bridges import apply_bridge_contract, load_bridge_contract
+            try:
+                bridges = load_bridge_contract(bridges_path)
+                bridges_added = apply_bridge_contract(
+                    merged,
+                    bridges,
+                    source_file=str(bridges_path.resolve()),
+                )
+            except ValueError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
         try:
             out_data = _jg.node_link_data(merged, edges="links")
         except TypeError:
@@ -2188,6 +2219,10 @@ def dispatch_command(cmd: str) -> None:
         from graphify.paths import write_json_atomic as _wja
         _wja(out_path, out_data, indent=2)
         print(f"Merged {len(graphs)} graphs -> {merged.number_of_nodes()} nodes, {merged.number_of_edges()} edges")
+        if auto_bridges_added:
+            print(f"Added {auto_bridges_added} inferred Java Client-to-Controller bridge relationship(s)")
+        if bridges_path is not None:
+            print(f"Added {bridges_added} cross-service bridge relationship(s) from {bridges_path}")
         print(f"Written to: {out_path}")
 
     elif cmd == "clone":
@@ -2607,7 +2642,7 @@ def dispatch_command(cmd: str) -> None:
                 "[--model M] [--mode deep] [--out DIR|--output DIR] [--google-workspace] [--no-cluster] "
                 "[--no-gitignore] [--code-only] "
                 "[--max-workers N] [--token-budget N] [--max-concurrency N] "
-                "[--api-timeout S] [--postgres DSN] [--cargo] [--allow-partial] [--timing]",
+                "[--api-timeout S] [--allow-partial] [--timing]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -2626,8 +2661,6 @@ def dispatch_command(cmd: str) -> None:
         model: str | None = None
         extract_mode: str | None = None
         out_dir: Path | None = None
-        cli_postgres_dsn: str | None = None
-        cli_cargo: bool = False
         cli_allow_partial: bool = False
         no_cluster = False
         dedup_llm = False
@@ -2737,13 +2770,6 @@ def dispatch_command(cmd: str) -> None:
                 cli_excludes.append(args[i + 1]); i += 2
             elif a.startswith("--exclude="):
                 cli_excludes.append(a.split("=", 1)[1]); i += 1
-            elif a == "--postgres" and i + 1 < len(args):
-                cli_postgres_dsn = args[i + 1]; i += 2
-            elif a.startswith("--postgres="):
-                cli_postgres_dsn = a.split("=", 1)[1]; i += 1
-            elif a == "--cargo":
-                cli_cargo = True
-                i += 1
             elif a == "--force":
                 force = True; i += 1
             elif a == "--allow-partial":
@@ -2753,8 +2779,8 @@ def dispatch_command(cmd: str) -> None:
             else:
                 i += 1
 
-        if not has_path and cli_postgres_dsn is None:
-            print("error: must specify a path to scan or a --postgres DSN", file=sys.stderr)
+        if not has_path:
+            print("error: must specify a Java service path", file=sys.stderr)
             sys.exit(1)
 
         _VALID_MODES = {"deep"}
@@ -2782,6 +2808,10 @@ def dispatch_command(cmd: str) -> None:
         out_root = (out_dir.resolve() if out_dir else target)
         graphify_out = out_root / _GRAPHIFY_OUT
         graphify_out.mkdir(parents=True, exist_ok=True)
+        # This distribution is intentionally specialised for Java backend
+        # services. Java-only is the default corpus shape for extract/update.
+        code_only = True
+        print("[graphify extract] Java backend scope: indexing .java files; all other inputs are ignored")
         # Persist corpus-shaping options so later update/watch/hook rebuilds
         # use the same file set as the initial extraction (#1886).
         from graphify.watch import (
@@ -2864,16 +2894,8 @@ def dispatch_command(cmd: str) -> None:
             deleted_files = list(detection.get("deleted_files", []))
             excluded_files = list(detection.get("excluded_files", []))
             unchanged_total = sum(len(v) for v in detection.get("unchanged_files", {}).values())
-            # #1909: derive the prune set from the existing graph itself, not
-            # just the manifest. A file that became excluded without ever
-            # being manifest-listed (every pre-#1897 graph is in this state)
-            # still has stale nodes carried forward by build_merge unless the
-            # graph's own sources are reconciled against the current corpus.
-            _seen_files = {f for _fl in files_by_type.values() for f in _fl}
-            _seen_files.update(detection.get("unclassified", []))
-            graph_stale_sources = _stale_graph_sources(
-                existing_graph_path, target, _seen_files, detection=detection
-            )
+            # Computed after the Java backend corpus filter below.
+            graph_stale_sources = []
         else:
             print(f"[graphify extract] scanning {target}")
             detection = _detect(
@@ -2892,6 +2914,35 @@ def dispatch_command(cmd: str) -> None:
             excluded_files = []
             graph_stale_sources = []
             unchanged_total = 0
+
+        # Restrict both changed and full-corpus views. This is intentionally
+        # stronger than --code-only: even other source languages are absent,
+        # so a merge of Java microservices cannot be polluted by unrelated
+        # frontend/scripts/configuration nodes.
+        for section in ("files", "new_files", "unchanged_files"):
+            mapping = detection.get(section)
+            if isinstance(mapping, dict):
+                mapping["code"] = [
+                    p for p in mapping.get("code", []) if Path(p).suffix.lower() == ".java"
+                ]
+                for category in ("document", "paper", "image", "video"):
+                    mapping[category] = []
+        files_by_type = detection.get("files", files_by_type)
+        active_code = detection.get("new_files", files_by_type) if incremental_mode else files_by_type
+        code_files = [Path(p) for p in active_code.get("code", [])]
+        doc_files = []
+        paper_files = []
+        image_files = []
+        if incremental_mode:
+            unchanged_total = len(detection.get("unchanged_files", {}).get("code", []))
+
+        if incremental_mode:
+            # Derive the prune set from the post-filter corpus. This removes any
+            # Python/JS/docs nodes left by an older graph.
+            _seen_files = {f for _fl in files_by_type.values() for f in _fl}
+            graph_stale_sources = _stale_graph_sources(
+                existing_graph_path, target, _seen_files, detection=detection
+            )
 
         semantic_files = doc_files + paper_files + image_files
         # --code-only: index code (pure local AST, no key) and skip the semantic
@@ -3276,37 +3327,13 @@ def dispatch_command(cmd: str) -> None:
             print(f"[graphify extract] warning: could not prune semantic cache: {exc}", file=sys.stderr)
         stages.mark("semantic extract")
 
-        pg_result: dict = {"nodes": [], "edges": []}
-        if cli_postgres_dsn is not None:
-            from graphify.pg_introspect import introspect_postgres
-            print(f"[graphify extract] introspecting PostgreSQL schema...")
-            try:
-                pg_result = introspect_postgres(cli_postgres_dsn)
-            except (ConnectionError, ImportError) as exc:
-                print(f"error: {exc}", file=sys.stderr)
-                sys.exit(1)
-            print(f"[graphify extract] PostgreSQL: {len(pg_result['nodes'])} nodes, "
-                  f"{len(pg_result['edges'])} edges")
-
-        cargo_result: dict = {"nodes": [], "edges": []}
-        if cli_cargo:
-            from graphify.cargo_introspect import introspect_cargo
-            print("[graphify extract] introspecting Cargo workspace...")
-            try:
-                cargo_result = introspect_cargo(target)
-            except (ConnectionError, ImportError, OSError) as exc:
-                print(f"error: {exc}", file=sys.stderr)
-                sys.exit(1)
-            print(f"[graphify extract] Cargo: {len(cargo_result['nodes'])} nodes, "
-                  f"{len(cargo_result['edges'])} edges")
-
-        # Merge AST + semantic + pg_result + cargo_result. Order matters for deduplication: passing AST
+        # Merge AST + semantic. Order matters for deduplication: passing AST
         # first means semantic node attributes win on collision (richer labels
         # for symbols also referenced in docs). Hyperedges only come from the
         # semantic side.
         merged: dict = {
-            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])) + list(pg_result.get("nodes", [])) + list(cargo_result.get("nodes", [])),
-            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])) + list(pg_result.get("edges", [])) + list(cargo_result.get("edges", [])),
+            "nodes": list(ast_result.get("nodes", [])) + list(sem_result.get("nodes", [])),
+            "edges": list(ast_result.get("edges", [])) + list(sem_result.get("edges", [])),
             "hyperedges": list(sem_result.get("hyperedges", [])),
             "input_tokens": ast_result.get("input_tokens", 0) + sem_result.get("input_tokens", 0),
             "output_tokens": ast_result.get("output_tokens", 0) + sem_result.get("output_tokens", 0),
@@ -3377,10 +3404,6 @@ def dispatch_command(cmd: str) -> None:
                 and not code_files
                 and not semantic_files
                 and not deleted_files
-                and not pg_result.get("nodes")
-                and not pg_result.get("edges")
-                and not cargo_result.get("nodes")
-                and not cargo_result.get("edges")
             ):
                 # An exclusion-only change reaches this gate (excluded files
                 # are deliberately NOT in deleted_files, #1908) but must still

@@ -36,6 +36,7 @@ def test_write_text_atomic_preserves_existing_on_failure(tmp_path, monkeypatch):
     assert sorted(x.name for x in tmp_path.iterdir()) == ["graph.json"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are not portable to Windows")
 def test_write_text_atomic_preserves_existing_mode(tmp_path):
     # An atomic replace must not tighten a 0644 file to mkstemp's 0600 default.
     p = tmp_path / "graph.json"
@@ -55,6 +56,7 @@ def test_write_text_atomic_new_file_respects_umask(tmp_path):
     assert (os.stat(p).st_mode & 0o777) == (0o666 & ~umask)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks requires Windows developer privileges")
 def test_write_text_atomic_writes_through_symlink(tmp_path):
     # Shared-output setups symlink graph.json to shared storage; the atomic write
     # must update the target and keep the link, not replace it with a real file.

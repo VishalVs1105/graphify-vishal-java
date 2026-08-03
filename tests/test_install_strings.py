@@ -145,5 +145,4 @@ def test_how_it_works_clarifies_code_only_semantic_extraction():
     from pathlib import Path
     doc = (Path(__file__).parent.parent / "docs" / "how-it-works.md").read_text(encoding="utf-8")
     assert "Code files are not sent to the LLM semantic extractor" in doc
-    assert "code files, Pass 3 is skipped entirely" in doc
-    assert "docs, papers, images, and transcripts" in doc
+    assert "Java extraction is local" in doc

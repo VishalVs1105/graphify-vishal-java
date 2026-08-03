@@ -264,14 +264,11 @@ def _git_head(cwd: Path | str | None = None) -> str | None:
 
 from graphify.detect import (
     CODE_EXTENSIONS,
-    DOC_EXTENSIONS,
-    PAPER_EXTENSIONS,
-    IMAGE_EXTENSIONS,
     _load_graphifyignore,
     _is_ignored,
 )
 
-_WATCHED_EXTENSIONS = CODE_EXTENSIONS | DOC_EXTENSIONS | PAPER_EXTENSIONS | IMAGE_EXTENSIONS
+_WATCHED_EXTENSIONS = CODE_EXTENSIONS
 _CODE_EXTENSIONS = CODE_EXTENSIONS
 
 
@@ -986,7 +983,7 @@ def _rebuild_code(
     project_root = Path.cwd().resolve() if not watch_path.is_absolute() else watch_root
     report_root = _report_root_label(watch_path)
     try:
-        from graphify.extract import extract, _get_extractor
+        from graphify.extract import extract
         from graphify.detect import detect
         from graphify.build import build_from_json, _is_ast_tier, _norm_source_file as _nsf
         from graphify.cluster import cluster, remap_communities_to_previous, score_all
@@ -1004,15 +1001,14 @@ def _rebuild_code(
             extra_excludes=_persisted_excludes or None,
             gitignore=_read_build_gitignore(out),
         )
-        code_files = [Path(f) for f in detected['files']['code']]
+        # This distribution indexes Java backend services only.
+        code_files = [
+            Path(f) for f in detected['files']['code']
+            if Path(f).suffix.lower() == ".java"
+        ]
 
-        # Include document files that have AST extractors (e.g. .md, .mdx, .qmd)
+        # Document AST scanning is disabled in Java backend mode.
         ast_doc_files: list[Path] = []
-        for doc_file in detected['files'].get('document', []):
-            p = Path(doc_file)
-            if _get_extractor(p) is not None:
-                code_files.append(p)
-                ast_doc_files.append(p)
 
         existing_graph = out / "graph.json"
         if not code_files and not existing_graph.exists():

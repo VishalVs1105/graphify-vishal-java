@@ -120,7 +120,8 @@ def test_env_kills_strict(tmp_path, monkeypatch):
 
 def test_out_of_project_read_silenced(tmp_path, monkeypatch):
     _fixture(tmp_path)
-    payload = {"session_id": "s1", "tool_name": "Read", "tool_input": {"file_path": "/somewhere/else/x.py"}}
+    outside = tmp_path.parent / "outside" / "X.java"
+    payload = {"session_id": "s1", "tool_name": "Read", "tool_input": {"file_path": str(outside)}}
     assert _invoke("read", payload, tmp_path, monkeypatch, strict=True).strip() == ""
     # soft mode too
     assert _invoke("read", payload, tmp_path, monkeypatch, strict=False).strip() == ""

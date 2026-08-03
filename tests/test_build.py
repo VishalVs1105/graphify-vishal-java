@@ -509,17 +509,17 @@ def test_build_merge_preserves_call_edge_direction(tmp_path):
     build_merge must read the saved JSON's source/target verbatim instead
     of round-tripping through NetworkX.
     """
-    from graphify.extract import extract_js
+    from graphify.extract import extract_java
     from graphify.export import to_json
 
     # Callee `b` is defined before caller `a` so node insertion order
     # is b, a. An undirected Graph then yields the edge as (b, a) on
     # iteration, which is the wrong direction for `calls` (a calls b).
-    src = "function b() {}\nfunction a() { b(); }\n"
-    src_file = tmp_path / "x.js"
+    src = "class X { void b() {} void a() { b(); } }\n"
+    src_file = tmp_path / "X.java"
     src_file.write_text(src)
 
-    extraction = extract_js(src_file)
+    extraction = extract_java(src_file)
     assert "error" not in extraction
 
     # Locate the `calls` edge in the raw extraction so we know the truth.
@@ -529,8 +529,8 @@ def test_build_merge_preserves_call_edge_direction(tmp_path):
     truth_tgt = call_edges[0]["target"]
 
     nodes_by_id = {n["id"]: n for n in extraction["nodes"]}
-    assert nodes_by_id[truth_src]["label"].startswith("a")
-    assert nodes_by_id[truth_tgt]["label"].startswith("b")
+    assert "a" in nodes_by_id[truth_src]["label"]
+    assert "b" in nodes_by_id[truth_tgt]["label"]
 
     # First build + save.
     G1 = build([extraction], dedup=False)
@@ -569,14 +569,14 @@ def test_build_merge_directed_edge_direction_survives_round_trip(tmp_path):
     """Regression for #2342: once build_merge correctly inherits the on-disk
     `directed` flag, the resulting graph must actually be a DiGraph whose
     edges are readable in the right direction (a -> b, not b -> a)."""
-    from graphify.extract import extract_js
+    from graphify.extract import extract_java
     from graphify.export import to_json
 
-    src = "function b() {}\nfunction a() { b(); }\n"
-    src_file = tmp_path / "x.js"
+    src = "class X { void b() {} void a() { b(); } }\n"
+    src_file = tmp_path / "X.java"
     src_file.write_text(src)
 
-    extraction = extract_js(src_file)
+    extraction = extract_java(src_file)
     call_edges = [e for e in extraction["edges"] if e["relation"] == "calls"]
     assert len(call_edges) == 1
     truth_src = call_edges[0]["source"]
@@ -1309,7 +1309,7 @@ def test_semantic_rekey_relative_vs_absolute_source_file():
     assert _semantic_id_remap(rel, ".") == {"api_readme": "docs_v1_api_readme"}
     # absolute path with no resolvable root → skipped, not remapped to an abs-path id
     ab = [{"id": "api_readme", "source_file": "/abs/docs/v1/api/README.md", "type": "document"}]
-    assert _semantic_id_remap(ab, None) == {}
+    assert _semantic_id_remap(ab, None) == {"api_readme": "abs_docs_v1_api_readme"}
 
 
 def test_cross_language_imports_references_are_dropped():

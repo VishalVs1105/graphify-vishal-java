@@ -547,6 +547,7 @@ def _worktree_guard_snippet() -> str:
     return _WORKTREE_GUARD + "echo RAN\n"
 
 
+@pytest.mark.skipif(shutil.which("sh") is None, reason="requires a POSIX shell")
 def test_worktree_guard_runs_on_primary_skips_linked(tmp_path):
     """End-to-end against a real `git worktree`: the guard falls through on the
     primary checkout and exits early inside a linked worktree (#1809, #1806)."""

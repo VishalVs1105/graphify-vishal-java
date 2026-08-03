@@ -131,17 +131,17 @@ def test_surprising_connections_cross_type_scores_higher():
     """Code↔paper edge should score higher than code↔code edge."""
     G = nx.Graph()
     for nid, label, src in [
-        ("a", "Transformer", "code/model.py"),
+        ("a", "Transformer", "code/Model.java"),
         ("b", "FlashAttn", "papers/flash.pdf"),
-        ("c", "Trainer", "code/train.py"),
-        ("d", "Dataset", "code/data.py"),
+        ("c", "Trainer", "code/Trainer.java"),
+        ("d", "Dataset", "code/Dataset.java"),
     ]:
         G.add_node(nid, label=label, source_file=src, file_type="code")
-    G.add_edge("a", "b", relation="references", confidence="EXTRACTED", weight=1.0, source_file="code/model.py")
-    G.add_edge("c", "d", relation="calls", confidence="EXTRACTED", weight=1.0, source_file="code/train.py")
+    G.add_edge("a", "b", relation="references", confidence="EXTRACTED", weight=1.0, source_file="code/Model.java")
+    G.add_edge("c", "d", relation="calls", confidence="EXTRACTED", weight=1.0, source_file="code/Trainer.java")
     nc = {"a": 0, "b": 1, "c": 0, "d": 0}
-    score_cross, reasons_cross = _surprise_score(G, "a", "b", G.edges["a", "b"], nc, "code/model.py", "papers/flash.pdf")
-    score_same, _ = _surprise_score(G, "c", "d", G.edges["c", "d"], nc, "code/train.py", "code/data.py")
+    score_cross, reasons_cross = _surprise_score(G, "a", "b", G.edges["a", "b"], nc, "code/Model.java", "papers/flash.pdf")
+    score_same, _ = _surprise_score(G, "c", "d", G.edges["c", "d"], nc, "code/Trainer.java", "code/Dataset.java")
     assert score_cross > score_same
     assert any("code" in r and "paper" in r for r in reasons_cross)
 
@@ -248,19 +248,14 @@ def test_surprising_connections_have_why_field():
 
 
 def test_file_category():
-    assert _file_category("model.py") == "code"
+    assert _file_category("Model.java") == "code"
+    assert _file_category("model.py") == "doc"
     assert _file_category("flash.pdf") == "paper"
     assert _file_category("diagram.png") == "image"
     assert _file_category("notes.md") == "doc"
     # Languages added in later releases — would misclassify as "doc" without detect.py import
-    assert _file_category("app.swift") == "code"
-    assert _file_category("plugin.lua") == "code"
-    assert _file_category("build.zig") == "code"
-    assert _file_category("deploy.ps1") == "code"
-    assert _file_category("server.ex") == "code"
-    assert _file_category("component.jsx") == "code"
-    assert _file_category("analysis.jl") == "code"
-    assert _file_category("view.m") == "code"
+    assert _file_category("app.swift") == "doc"
+    assert _file_category("component.jsx") == "doc"
 
 
 def test_is_concept_node_empty_source():
@@ -351,10 +346,10 @@ def test_graph_diff_empty_diff():
 
 def _make_code_doc_graph():
     G = nx.Graph()
-    G.add_node("py_fn", label="ProcessData", source_file="src/processor.py", file_type="code")
+    G.add_node("py_fn", label="ProcessData", source_file="src/Processor.java", file_type="code")
     G.add_node("md_doc", label="README Section", source_file="docs/readme.md", file_type="document")
-    G.add_node("py_a", label="ServiceA", source_file="src/service.py", file_type="code")
-    G.add_node("py_b", label="ServiceB", source_file="src/utils.py", file_type="code")
+    G.add_node("py_a", label="ServiceA", source_file="src/ServiceA.java", file_type="code")
+    G.add_node("py_b", label="ServiceB", source_file="src/ServiceB.java", file_type="code")
     return G
 
 
@@ -362,16 +357,16 @@ def test_code_doc_inferred_calls_suppressed():
     """Code→doc INFERRED calls edge should score lower than same-language EXTRACTED."""
     G = _make_code_doc_graph()
     G.add_edge("py_fn", "md_doc", relation="calls", confidence="INFERRED",
-               weight=0.8, source_file="src/processor.py")
+               weight=0.8, source_file="src/Processor.java")
     G.add_edge("py_a", "py_b", relation="calls", confidence="EXTRACTED",
-               weight=1.0, source_file="src/service.py")
+               weight=1.0, source_file="src/ServiceA.java")
     nc = {"py_fn": 0, "md_doc": 1, "py_a": 0, "py_b": 0}
     score_noise, _ = _surprise_score(G, "py_fn", "md_doc",
                                      G.edges["py_fn", "md_doc"], nc,
-                                     "src/processor.py", "docs/readme.md")
+                                     "src/Processor.java", "docs/readme.md")
     score_real, _ = _surprise_score(G, "py_a", "py_b",
                                     G.edges["py_a", "py_b"], nc,
-                                    "src/service.py", "src/utils.py")
+                                    "src/ServiceA.java", "src/ServiceB.java")
     assert score_noise <= score_real
 
 
@@ -379,16 +374,16 @@ def test_code_doc_inferred_uses_suppressed():
     """Code→doc INFERRED uses edge should score lower than same-language EXTRACTED."""
     G = _make_code_doc_graph()
     G.add_edge("py_fn", "md_doc", relation="uses", confidence="INFERRED",
-               weight=0.8, source_file="src/processor.py")
+               weight=0.8, source_file="src/Processor.java")
     G.add_edge("py_a", "py_b", relation="calls", confidence="EXTRACTED",
-               weight=1.0, source_file="src/service.py")
+               weight=1.0, source_file="src/ServiceA.java")
     nc = {"py_fn": 0, "md_doc": 1, "py_a": 0, "py_b": 0}
     score_noise, _ = _surprise_score(G, "py_fn", "md_doc",
                                      G.edges["py_fn", "md_doc"], nc,
-                                     "src/processor.py", "docs/readme.md")
+                                     "src/Processor.java", "docs/readme.md")
     score_real, _ = _surprise_score(G, "py_a", "py_b",
                                     G.edges["py_a", "py_b"], nc,
-                                    "src/service.py", "src/utils.py")
+                                    "src/ServiceA.java", "src/ServiceB.java")
     assert score_noise <= score_real
 
 
@@ -426,21 +421,21 @@ def test_code_unknown_extension_inferred_calls_suppressed():
     calls/uses to unknown-extension files are suppressed the same as code↔doc."""
     assert _file_category("vendor/random.xyz") == "doc"
     G = nx.Graph()
-    G.add_node("py_fn", label="Handler", source_file="src/handler.py", file_type="code")
+    G.add_node("py_fn", label="Handler", source_file="src/Handler.java", file_type="code")
     G.add_node("unk", label="Handler", source_file="vendor/unknown.xyz", file_type="document")
-    G.add_node("py_a", label="A", source_file="src/a.py", file_type="code")
-    G.add_node("py_b", label="B", source_file="src/b.py", file_type="code")
+    G.add_node("py_a", label="A", source_file="src/A.java", file_type="code")
+    G.add_node("py_b", label="B", source_file="src/B.java", file_type="code")
     G.add_edge("py_fn", "unk", relation="calls", confidence="INFERRED",
-               weight=0.8, source_file="src/handler.py")
+               weight=0.8, source_file="src/Handler.java")
     G.add_edge("py_a", "py_b", relation="calls", confidence="EXTRACTED",
-               weight=1.0, source_file="src/a.py")
+               weight=1.0, source_file="src/A.java")
     nc = {"py_fn": 0, "unk": 1, "py_a": 0, "py_b": 0}
     score_unk, _ = _surprise_score(G, "py_fn", "unk",
                                    G.edges["py_fn", "unk"], nc,
-                                   "src/handler.py", "vendor/unknown.xyz")
+                                   "src/Handler.java", "vendor/unknown.xyz")
     score_same, _ = _surprise_score(G, "py_a", "py_b",
                                     G.edges["py_a", "py_b"], nc,
-                                    "src/a.py", "src/b.py")
+                                    "src/A.java", "src/B.java")
     assert score_unk <= score_same
 
 

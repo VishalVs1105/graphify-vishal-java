@@ -123,11 +123,7 @@ ENUM_PROSE = "`code`, `document`, `paper`, `image`, `rationale`, `concept`"
 # shared-verbatim; two (extraction-spec, hooks) are variant-selected and resolved
 # per platform from the extraction/hooks_variant fields.
 _SHARED_REFERENCES = {
-    "update": "references/shared/update.md",
-    "exports": "references/shared/exports.md",
     "github-and-merge": "references/shared/github-and-merge.md",
-    "transcribe": "references/shared/transcribe.md",
-    "add-watch": "references/shared/add-watch.md",
 }
 _EXTRACTION_SOURCE = {
     "verbose": "references/shared/extraction-spec.md",
@@ -287,9 +283,7 @@ class Platform:
     def reference_sources(self) -> dict[str, str]:
         """Resolve the rendered-name -> source-fragment map for this split platform."""
         refs = dict(_SHARED_REFERENCES)
-        refs["extraction-spec"] = _EXTRACTION_SOURCE[self.extraction]
         refs["query"] = _QUERY_REFERENCE
-        refs["hooks"] = _HOOKS_SOURCE[self.hooks_variant]
         return refs
 
     @property
@@ -352,7 +346,8 @@ def _render_frontmatter(platform: Platform) -> str:
     """
     if platform.description is None:
         raise ValueError(f"split platform '{platform.key}' is missing a description")
-    lines = ["---", f"name: {platform.name}", f'description: "{platform.description}"']
+    description = "Build, merge, and query knowledge graphs for Java backend services."
+    lines = ["---", f"name: {platform.name}", f'description: "{description}"']
     lines.append("---")
     return "\n".join(lines)
 
@@ -361,29 +356,7 @@ def _render_core(platform: Platform) -> str:
     """Fill the shared core template's per-platform slots for this platform."""
     template = _read_fragment(f"core/{platform.core}.md")
 
-    if platform.dispatch is None:
-        raise ValueError(f"split platform '{platform.key}' is missing a dispatch variant")
-
-    install = _read_fragment(f"shell/{platform.shell}.md").rstrip("\n")
-    dispatch = _read_fragment(f"dispatch/{platform.dispatch}.md").rstrip("\n")
-    query_stub = _read_fragment(_QUERY_STUB).rstrip("\n")
-
-    if platform.extra_sections:
-        extra = "".join(
-            _read_fragment(f"extra/{name}.md").rstrip("\n") + "\n\n"
-            for name in platform.extra_sections
-        )
-    else:
-        extra = ""
-
-    body = (
-        template.replace("@@FRONTMATTER@@", _render_frontmatter(platform))
-        .replace("@@INSTALL@@", install)
-        .replace("@@DISPATCH@@", dispatch)
-        .replace("@@QUERY_STUB@@", query_stub)
-        .replace("@@HOOKS_TARGET@@", platform.hooks_target)
-        .replace("@@EXTRA@@", extra)
-    )
+    body = template.replace("@@FRONTMATTER@@", _render_frontmatter(platform))
     if "@@" in body:
         leftover = sorted(set(re.findall(r"@@\w+@@", body)))
         raise ValueError(f"unfilled core slots for '{platform.key}': {leftover}")
@@ -954,6 +927,18 @@ def _is_semantic_cache_scope_fix_line(line: str) -> bool:
     ) or stripped.startswith("saved = save_semantic_cache(")
 
 
+def _is_java_backend_workflow_line(line: str) -> bool:
+    """Whether a monolith line specialises extraction for Java backends."""
+    stripped = line.strip()
+    return (
+        "Java backend workflow (default)" in stripped
+        or "/graphify <service1> <service2>" in stripped
+        or "graphify cluster-only INPUT_PATH" in stripped
+        or "mixed-corpus workflow below" in stripped
+        or "automatically ignore every non-`.java` input" in stripped
+    )
+
+
 # Every line that may differ between a rendered monolith and its pristine v8
 # baseline. Each predicate documents one sanctioned change-class; a blank line is
 # allowed because the multi-line fix blocks insert spacing. Anything else failing
@@ -974,6 +959,7 @@ _SANCTIONED_MONOLITH_DIFFS = (
     _is_obsidian_usage_comment_line,
     _is_uv_from_interpreter_fix_line,
     _is_semantic_cache_scope_fix_line,
+    _is_java_backend_workflow_line,
 )
 
 

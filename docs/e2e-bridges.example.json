@@ -1,0 +1,13 @@
+{
+  "bridges": [
+    {
+      "source_repo": "checkout-service",
+      "source": "PaymentClient",
+      "target_repo": "payment-service",
+      "target": "PaymentController",
+      "relation": "calls",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0
+    }
+  ]
+}

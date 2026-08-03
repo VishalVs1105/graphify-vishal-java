@@ -20,12 +20,10 @@ from graphify.install import (
     _project_uninstall,
     claude_uninstall,
     codebuddy_uninstall,
-    gemini_uninstall,
 )
 
 PLATFORMS = [
     pytest.param(claude_uninstall, "claude", ".claude", id="claude"),
-    pytest.param(gemini_uninstall, "gemini", ".gemini", id="gemini"),
     pytest.param(codebuddy_uninstall, "codebuddy", ".codebuddy", id="codebuddy"),
 ]
 

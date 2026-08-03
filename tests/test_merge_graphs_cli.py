@@ -167,3 +167,66 @@ def test_merge_graphs_preserves_import_edge_direction(tmp_path):
     assert repo2_link["source"] == "repo2::main"
     assert repo2_link["target"] == "repo2::utils"
 
+
+def test_merge_graphs_auto_links_java_client_to_controller_and_uses_standard_output(tmp_path):
+    checkout = tmp_path / "checkout-service" / "graphify-out" / "graph.json"
+    payment = tmp_path / "payment-service" / "graphify-out" / "graph.json"
+    checkout.parent.mkdir(parents=True)
+    payment.parent.mkdir(parents=True)
+
+    checkout.write_text(json.dumps({
+        "directed": False,
+        "multigraph": False,
+        "nodes": [
+            {"id": "controller", "label": "CheckoutController"},
+            {"id": "orders", "label": "OrderService"},
+            {"id": "client", "label": "PaymentClient"},
+        ],
+        "links": [
+            {"source": "controller", "target": "orders", "relation": "calls"},
+            {"source": "orders", "target": "client", "relation": "calls"},
+        ],
+    }), encoding="utf-8")
+    payment.write_text(json.dumps({
+        "directed": False,
+        "multigraph": False,
+        "nodes": [
+            {"id": "controller", "label": "PaymentController"},
+            {"id": "processor", "label": "PaymentProcessor"},
+            {"id": "stripe", "label": "StripeGateway"},
+        ],
+        "links": [
+            {"source": "controller", "target": "processor", "relation": "calls"},
+            {"source": "processor", "target": "stripe", "relation": "calls"},
+        ],
+    }), encoding="utf-8")
+    out = tmp_path / "graphify-out" / "graph.json"
+
+    result = _run([
+        "merge-graphs", str(checkout), str(payment),
+    ], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["graph"]["graphify_merged"] is True
+    assert data["graph"]["repos"] == ["checkout-service", "payment-service"]
+    bridge = next(link for link in data["links"] if link.get("cross_service"))
+    assert bridge["source"] == "checkout-service::client"
+    assert bridge["target"] == "payment-service::controller"
+    assert bridge["relation"] == "calls"
+    assert bridge["confidence"] == "INFERRED"
+    assert bridge["bridge_strategy"] == "java_client_controller_name"
+    directed_calls = {
+        (link["source"], link["target"])
+        for link in data["links"]
+        if link.get("relation") == "calls"
+    }
+    assert {
+        ("checkout-service::controller", "checkout-service::orders"),
+        ("checkout-service::orders", "checkout-service::client"),
+        ("checkout-service::client", "payment-service::controller"),
+        ("payment-service::controller", "payment-service::processor"),
+        ("payment-service::processor", "payment-service::stripe"),
+    } <= directed_calls
+    assert "Added 1 inferred Java Client-to-Controller bridge relationship" in result.stdout
+
