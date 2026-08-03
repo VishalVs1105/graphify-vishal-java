@@ -212,3 +212,88 @@ class {controller} {{
         link.get("bridge_strategy") == "java_http_route"
         for link in data["links"]
     )
+
+
+def test_method_name_auto_bridges_repository_to_controller_when_route_is_constant(
+    tmp_path: Path,
+):
+    source = tmp_path / "catalog-ds"
+    target = tmp_path / "biz-catalog-service"
+    source.mkdir()
+    target.mkdir()
+    (source / "BizCatalogRepository.java").write_text(
+        '''
+interface BizCatalogRepository {
+    @GetMapping(CatalogRoutes.GET_ALL_DEVICES)
+    Object getAllDevices();
+}
+''',
+        encoding="utf-8",
+    )
+    (target / "DeviceController.java").write_text(
+        '''
+@RestController
+class DeviceController {
+    @GetMapping(CatalogRoutes.GET_ALL_DEVICES)
+    Object getAllDevices() { return null; }
+}
+''',
+        encoding="utf-8",
+    )
+    for service in (source, target):
+        result = _run(["extract", str(service), "--no-cluster"], tmp_path)
+        assert result.returncode == 0, result.stderr
+
+    merged = _run([
+        "merge-graphs",
+        str(source / "graphify-out" / "graph.json"),
+        str(target / "graphify-out" / "graph.json"),
+    ], tmp_path)
+    assert merged.returncode == 0, merged.stderr
+    assert "Repository-to-Controller method bridge" in merged.stdout
+    data = json.loads((tmp_path / "graphify-out" / "graph.json").read_text(encoding="utf-8"))
+    nodes = {node["id"]: node for node in data["nodes"]}
+    bridges = [
+        link for link in data["links"]
+        if link.get("bridge_strategy") == "java_repository_controller_method_name"
+    ]
+    assert len(bridges) == 1
+    bridge = bridges[0]
+    assert nodes[bridge["source"]]["label"] == ".getAllDevices()"
+    assert nodes[bridge["source"]]["repo"] == "catalog-ds"
+    assert nodes[bridge["target"]]["label"] == ".getAllDevices()"
+    assert nodes[bridge["target"]]["repo"] == "biz-catalog-service"
+    assert bridge["confidence_score"] == 0.85
+
+
+def test_method_name_bridge_does_not_guess_between_controllers(tmp_path: Path):
+    source = tmp_path / "catalog-ds"
+    targets = [tmp_path / "catalog-a", tmp_path / "catalog-b"]
+    source.mkdir()
+    for target in targets:
+        target.mkdir()
+    (source / "BizCatalogRepository.java").write_text(
+        "interface BizCatalogRepository { Object getAllDevices(); }\n",
+        encoding="utf-8",
+    )
+    for index, target in enumerate(targets):
+        (target / f"Device{index}Controller.java").write_text(
+            f"@RestController class Device{index}Controller "
+            "{ Object getAllDevices() { return null; } }\n",
+            encoding="utf-8",
+        )
+    for service in (source, *targets):
+        result = _run(["extract", str(service), "--no-cluster"], tmp_path)
+        assert result.returncode == 0, result.stderr
+
+    merged = _run([
+        "merge-graphs",
+        str(source / "graphify-out" / "graph.json"),
+        *(str(target / "graphify-out" / "graph.json") for target in targets),
+    ], tmp_path)
+    assert merged.returncode == 0, merged.stderr
+    data = json.loads((tmp_path / "graphify-out" / "graph.json").read_text(encoding="utf-8"))
+    assert not any(
+        link.get("bridge_strategy") == "java_repository_controller_method_name"
+        for link in data["links"]
+    )

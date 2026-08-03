@@ -205,6 +205,14 @@ def _write_java_interface_flow_graph(tmp_path):
         ("impl_method", ".getAddonDetailsByExternalIds()", "rcom-catalog-ds", "api/src/main/java/app/AddonServiceImpl.java", "L39"),
         ("repository_class", "BizCatalogRepository", "rcom-catalog-ds", "api/src/main/java/app/BizCatalogRepository.java", "L22"),
         ("repository_method", ".getProductOfferingByExternalIds()", "rcom-catalog-ds", "api/src/main/java/app/BizCatalogRepository.java", "L25"),
+        ("catalog_controller", "SocController", "biz-catalog-service", "src/main/java/catalog/SocController.java", "L30"),
+        ("catalog_controller_method", ".getProductOfferingByExternalIds()", "biz-catalog-service", "src/main/java/catalog/SocController.java", "L42"),
+        ("catalog_service", "CatalogService", "biz-catalog-service", "src/main/java/catalog/CatalogService.java", "L10"),
+        ("catalog_service_method", ".getProductOfferingByExternalIds()", "biz-catalog-service", "src/main/java/catalog/CatalogService.java", "L14"),
+        ("catalog_service_impl", "CatalogServiceImpl", "biz-catalog-service", "src/main/java/catalog/CatalogServiceImpl.java", "L20"),
+        ("catalog_impl_method", ".getProductOfferingByExternalIds()", "biz-catalog-service", "src/main/java/catalog/CatalogServiceImpl.java", "L35"),
+        ("soc_repository", "CatalogSocRepository", "biz-catalog-service", "src/main/java/catalog/CatalogSocRepository.java", "L12"),
+        ("soc_repository_method", ".findByExternalIds()", "biz-catalog-service", "src/main/java/catalog/CatalogSocRepository.java", "L18"),
         ("test_class", "AddonControllerTest", "rcom-catalog-ds", "api/src/test/java/app/AddonControllerTest.java", "L40"),
         ("test_method", ".getAddonDetailsByExternalIds()", "rcom-catalog-ds", "api/src/test/java/app/AddonControllerTest.java", "L54"),
     ]
@@ -217,6 +225,8 @@ def _write_java_interface_flow_graph(tmp_path):
             source_location=location,
         )
     G.add_node("response_entity", label="ResponseEntity", repo="rcom-catalog-ds")
+    G.nodes["repository_class"]["metadata"] = {"java_http_role": "outbound"}
+    G.nodes["catalog_controller"]["metadata"] = {"java_http_role": "inbound"}
     G.nodes["controller_method"]["metadata"] = {
         "java_http_role": "inbound",
         "java_http_routes": [{"method": "GET", "path": "/v1/remote/addons/details"}],
@@ -226,6 +236,10 @@ def _write_java_interface_flow_graph(tmp_path):
         ("service_interface", "service_method"),
         ("service_impl", "impl_method"),
         ("repository_class", "repository_method"),
+        ("catalog_controller", "catalog_controller_method"),
+        ("catalog_service", "catalog_service_method"),
+        ("catalog_service_impl", "catalog_impl_method"),
+        ("soc_repository", "soc_repository_method"),
         ("test_class", "test_method"),
     ):
         G.add_edge(owner, method, relation="method", confidence="EXTRACTED")
@@ -234,10 +248,23 @@ def _write_java_interface_flow_graph(tmp_path):
         relation="implements", confidence="EXTRACTED",
         _src="service_impl", _tgt="service_interface",
     )
+    G.add_edge(
+        "catalog_service_impl", "catalog_service",
+        relation="implements", confidence="EXTRACTED",
+        _src="catalog_service_impl", _tgt="catalog_service",
+    )
     G.add_edge("test_method", "controller_method", relation="calls", confidence="INFERRED")
     G.add_edge("controller_method", "service_method", relation="calls", confidence="INFERRED")
     G.add_edge("controller_method", "response_entity", relation="calls", confidence="EXTRACTED")
     G.add_edge("impl_method", "repository_method", relation="calls", confidence="INFERRED")
+    G.add_edge(
+        "catalog_controller_method", "catalog_service_method",
+        relation="calls", confidence="INFERRED",
+    )
+    G.add_edge(
+        "catalog_impl_method", "soc_repository_method",
+        relation="calls", confidence="INFERRED",
+    )
     graph_path = tmp_path / "java-interface-flow.json"
     graph_path.write_text(json.dumps(json_graph.node_link_data(G, edges="links")))
     return graph_path
@@ -260,9 +287,50 @@ def test_query_cli_follows_java_interface_dispatch_and_omits_noise(
     assert "AddonService.getAddonDetailsByExternalIds() --dispatches_to" in out
     assert "bridge=java_interface_dispatch" in out
     assert "AddonServiceImpl.getAddonDetailsByExternalIds() --calls" in out
-    assert "BizCatalogRepository.getProductOfferingByExternalIds()" in out
+    assert "BizCatalogRepository.getProductOfferingByExternalIds() --calls" in out
+    assert "bridge=java_repository_controller_method_name" in out
+    assert "[biz-catalog-service] SocController.getProductOfferingByExternalIds()" in out
+    assert "CatalogService.getProductOfferingByExternalIds() --dispatches_to" in out
+    assert "CatalogServiceImpl.getProductOfferingByExternalIds() --calls" in out
+    assert "CatalogSocRepository.findByExternalIds()" in out
     assert "AddonControllerTest" not in out
     assert "ResponseEntity" not in out
+
+
+def test_query_cli_continues_deep_java_flow_to_recorded_leaf(monkeypatch, tmp_path, capsys):
+    G = nx.Graph()
+    methods = []
+    for index in range(12):
+        owner = f"stage_class_{index}"
+        method = f"stage_method_{index}"
+        source = f"src/main/java/app/Stage{index}.java"
+        G.add_node(owner, label=f"Stage{index}", repo="deep-service", source_file=source)
+        G.add_node(
+            method,
+            label=f".step{index}()",
+            repo="deep-service",
+            source_file=source,
+            source_location=f"L{index + 10}",
+        )
+        G.add_edge(owner, method, relation="method", confidence="EXTRACTED")
+        methods.append(method)
+    G.nodes[methods[0]]["metadata"] = {
+        "java_http_role": "inbound",
+        "java_http_routes": [{"method": "GET", "path": "/deep"}],
+    }
+    for source, target in zip(methods, methods[1:]):
+        G.add_edge(source, target, relation="calls", confidence="EXTRACTED")
+    graph_path = tmp_path / "deep-java-flow.json"
+    graph_path.write_text(json.dumps(json_graph.node_link_data(G, edges="links")))
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(mainmod.sys, "argv", [
+        "graphify", "query", "Explain the complete flow of GET /deep in deep-service",
+        "--graph", str(graph_path), "--budget", "10000",
+    ])
+
+    mainmod.main()
+    out = capsys.readouterr().out
+    assert "Stage11.step11()" in out
 
 
 def _write_calls_graph(tmp_path):

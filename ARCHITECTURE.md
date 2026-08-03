@@ -32,7 +32,9 @@ BizCatalogRepository.getAddon() -> AddonController.getAddon()
 ```
 
 When route metadata is unavailable, merge falls back to exactly one same-stem
-Java client and controller pair:
+Java client and controller pair. Before the class-level fallback, an exact and
+unique outbound repository-method/controller-method name match is used; this
+covers annotation routes stored in constants:
 
 ```text
 PaymentClient -> PaymentController
@@ -40,7 +42,8 @@ PaymentClient -> PaymentController
 
 The merged graph is written to the workspace-root
 `graphify-out/graph.json`. Explicit bridge JSON remains available for dynamic
-or constant-based routes; ambiguous endpoints fail instead of being guessed.
+routes whose method names also differ; ambiguous endpoints fail instead of
+being guessed.
 
 ## Agent integration
 

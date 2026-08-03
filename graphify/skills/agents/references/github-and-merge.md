@@ -29,6 +29,10 @@ controller handler with the same HTTP verb and normalized route. Path-variable
 names do not need to match (`/soc/{id}` matches `/soc/{socId}`). This supports
 enterprise interfaces such as `BizCatalogRepository` without a manual bridge.
 
+If route annotations use constants, merge next tries an exact, unique method
+name between an outbound repository/client and a controller in another service.
+It does not bridge generic or ambiguous method names.
+
 As a fallback, an unambiguous `*Client` class is connected to a same-stem
 `*Controller` in another service. For example:
 
@@ -40,10 +44,11 @@ PaymentController -> PaymentProcessor -> StripeGateway
 
 Route bridges are marked `cross_service=true` with
 `bridge_strategy=java_http_route`. Naming fallback bridges use
-`bridge_strategy=java_client_controller_name`.
+`bridge_strategy=java_repository_controller_method_name` for methods or
+`bridge_strategy=java_client_controller_name` for classes.
 
-If annotations use constants that cannot be resolved statically or endpoints
-are ambiguous, create a bridge contract:
+If both routes and method names differ, or endpoints are ambiguous, create a
+bridge contract:
 
 ```json
 {

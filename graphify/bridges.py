@@ -14,6 +14,10 @@ _CONFIDENCES = {"EXTRACTED", "INFERRED", "AMBIGUOUS"}
 _JAVA_CLIENT_SUFFIX = "client"
 _JAVA_CONTROLLER_SUFFIX = "controller"
 _HTTP_PATH_VARIABLE_RE = re.compile(r"\{[^/{}]+\}")
+_JAVA_GENERIC_METHOD_NAMES = frozenset({
+    "call", "create", "delete", "execute", "find", "get", "handle",
+    "process", "remove", "save", "send", "update",
+})
 
 
 def _normalise_symbol(value: object) -> str:
@@ -157,6 +161,118 @@ def _java_http_routes(data: dict) -> tuple[str, list[tuple[str, str]]]:
         path = _normalise_http_path(raw.get("path"))
         routes.append((method, path))
     return role, list(dict.fromkeys(routes))
+
+
+def _true_edge_records(G: nx.Graph):
+    """Yield graph edges in their persisted source-to-target direction."""
+    if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)):
+        records = ((u, v, data) for u, v, _key, data in G.edges(keys=True, data=True))
+    else:
+        records = G.edges(data=True)
+    for u, v, data in records:
+        source = data.get("_src", u)
+        target = data.get("_tgt", v)
+        if {source, target} != {u, v}:
+            source, target = u, v
+        yield str(source), str(target), data
+
+
+def _java_class_http_role(data: dict) -> str:
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        role = str(metadata.get("java_http_role", "")).strip().casefold()
+        if role in {"inbound", "outbound"}:
+            return role
+    label = str(data.get("label", "")).strip().casefold()
+    if label.endswith(_JAVA_CONTROLLER_SUFFIX):
+        return "inbound"
+    if label.endswith(("client", "repository", "gateway", "connector", "adapter", "api")):
+        return "outbound"
+    return ""
+
+
+def _java_method_name(data: dict) -> str:
+    return str(data.get("label", "")).strip().removeprefix(".").removesuffix("()").casefold()
+
+
+def derive_java_method_name_bridges(G: nx.Graph) -> list[tuple[str, str, dict]]:
+    """Derive safe repository/client-method -> controller-method service hops.
+
+    This is the deterministic fallback for enterprise clients whose HTTP paths
+    live behind constants or generated configuration and therefore cannot be
+    recovered as literal annotation metadata.  It only accepts an exact,
+    non-generic method name with one controller candidate in another repository.
+    """
+    records = list(_true_edge_records(G))
+    methods_by_owner: dict[str, list[str]] = {}
+    for source, target, data in records:
+        if data.get("relation") == "method" and source in G and target in G:
+            methods_by_owner.setdefault(source, []).append(target)
+
+    inbound_by_name: dict[str, list[tuple[str, str]]] = {}
+    outbound: list[tuple[str, str, str]] = []
+    for owner, methods in methods_by_owner.items():
+        role = _java_class_http_role(G.nodes[owner])
+        if role not in {"inbound", "outbound"}:
+            continue
+        owner_repo = str(G.nodes[owner].get("repo", "")).strip()
+        if not owner_repo:
+            continue
+        for method in methods:
+            name = _java_method_name(G.nodes[method])
+            if not name or name in _JAVA_GENERIC_METHOD_NAMES or len(name) < 6:
+                continue
+            if role == "inbound":
+                inbound_by_name.setdefault(name, []).append((method, owner_repo))
+            else:
+                outbound.append((method, owner_repo, name))
+
+    bridged_sources = {
+        source
+        for source, target, data in records
+        if data.get("relation") == "calls"
+        and source in G and target in G
+        and str(G.nodes[source].get("repo", ""))
+        != str(G.nodes[target].get("repo", ""))
+    }
+    derived: list[tuple[str, str, dict]] = []
+    for source, source_repo, name in outbound:
+        if source in bridged_sources:
+            continue
+        candidates = {
+            target
+            for target, target_repo in inbound_by_name.get(name, [])
+            if target_repo != source_repo
+        }
+        if len(candidates) != 1:
+            continue
+        target = next(iter(candidates))
+        derived.append((
+            source,
+            target,
+            {
+                "relation": "calls",
+                "confidence": "INFERRED",
+                "confidence_score": 0.85,
+                "source_file": "graphify:auto-java-method-name-bridge",
+                "source_location": None,
+                "weight": 1.0,
+                "cross_service": True,
+                "bridge_strategy": "java_repository_controller_method_name",
+                "method_name": name,
+                "_src": source,
+                "_tgt": target,
+            },
+        ))
+    return derived
+
+
+def infer_java_method_name_bridges(G: nx.Graph) -> int:
+    """Persist every safe method-name bridge derived for a merged graph."""
+    derived = derive_java_method_name_bridges(G)
+    for source, target, data in derived:
+        G.add_edge(source, target, **data)
+    return len(derived)
 
 
 def infer_java_http_route_bridges(G: nx.Graph) -> int:

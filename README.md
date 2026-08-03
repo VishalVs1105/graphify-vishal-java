@@ -78,6 +78,13 @@ For example, `GET /catalog/addons/{externalId}` matches
 `GET /catalog/addons/{id}`. This works for enterprise interfaces such as
 `BizCatalogRepository` without a manual bridge.
 
+If an annotation path is hidden behind a Java constant, merge falls back to an
+exact, unique method-name match between the outbound repository/client and a
+controller in another service. Generic or ambiguous method names are never
+guessed. The API-flow query then continues from that controller through service
+interfaces, implementations, repositories, and gateways until the recorded
+call chain ends.
+
 When route metadata is unavailable, Graphify also connects a unique outbound
 `*Client` type to a same-stem `*Controller` type in another repository:
 

@@ -672,6 +672,39 @@ def _java_mapping_paths(values: dict[str, list[str]], *keys: str) -> list[str]:
     return list(dict.fromkeys(path.strip() for path in paths if path.strip())) or [""]
 
 
+def _java_has_unresolved_path_argument(
+    annotation,
+    source: bytes,
+    values: dict[str, list[str]],
+    *keys: str,
+) -> bool:
+    """Detect an explicit annotation path expression with no string literal.
+
+    ``@GetMapping`` legitimately means the empty relative path, while
+    ``@GetMapping(Routes.GET_ALL)`` is unresolved and must not be represented as
+    ``/``.  The latter previously fabricated route matches between unrelated
+    constant-based enterprise endpoints.
+    """
+    if any(values.get(key) for key in keys):
+        return False
+    arguments = annotation.child_by_field_name("arguments")
+    if arguments is None:
+        arguments = next(
+            (child for child in annotation.children if child.type == "annotation_argument_list"),
+            None,
+        )
+    if arguments is None:
+        return False
+    named = [child for child in arguments.children if child.is_named]
+    if not named:
+        return False
+    if any(child.type != "element_value_pair" for child in named):
+        return True
+    raw = _read_text(arguments, source)
+    key_pattern = "|".join(re.escape(key) for key in keys)
+    return bool(re.search(rf"\b(?:{key_pattern})\s*=", raw))
+
+
 def _java_http_class_info(
     declaration_node,
     source: bytes,
@@ -693,20 +726,31 @@ def _java_http_class_info(
         role = "outbound"
 
     base_paths: list[str] = []
+    base_paths_resolved = True
     for annotation in annotations:
         name = _java_annotation_name(annotation, source).casefold()
         values = _java_annotation_values(annotation, source)
         if name == "requestmapping":
+            if _java_has_unresolved_path_argument(annotation, source, values, "path", "value"):
+                base_paths_resolved = False
+                continue
             base_paths.extend(_java_mapping_paths(values, "path", "value"))
         elif name == "feignclient":
+            if _java_has_unresolved_path_argument(annotation, source, values, "path"):
+                base_paths_resolved = False
+                continue
             base_paths.extend(values.get("path", []))
         elif name == "httpexchange":
+            if _java_has_unresolved_path_argument(annotation, source, values, "url", "value"):
+                base_paths_resolved = False
+                continue
             base_paths.extend(_java_mapping_paths(values, "url", "value"))
             if not role and declaration_type == "interface_declaration":
                 role = "outbound"
     return {
         "role": role,
         "base_paths": list(dict.fromkeys(base_paths)) or [""],
+        "base_paths_resolved": base_paths_resolved,
     }
 
 
@@ -719,8 +763,14 @@ def _java_http_method_mappings(declaration_node, source: bytes) -> list[dict[str
         verb = _JAVA_HTTP_METHOD_ANNOTATIONS.get(name)
         paths: list[str] = []
         if verb:
+            if _java_has_unresolved_path_argument(
+                annotation, source, values, "path", "value", "url",
+            ):
+                continue
             paths = _java_mapping_paths(values, "path", "value", "url")
         elif name == "requestmapping":
+            if _java_has_unresolved_path_argument(annotation, source, values, "path", "value"):
+                continue
             raw = _read_text(annotation, source)
             verbs = list(dict.fromkeys(re.findall(
                 r"RequestMethod\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)",
@@ -743,6 +793,8 @@ def _java_http_method_mappings(declaration_node, source: bytes) -> list[dict[str
                     })
             continue
         elif name == "httpexchange":
+            if _java_has_unresolved_path_argument(annotation, source, values, "url", "value"):
+                continue
             method_values = [value.upper() for value in values.get("method", [])]
             verbs = [value for value in method_values if value in _JAVA_HTTP_VERBS] or ["*"]
             paths = _java_mapping_paths(values, "url", "value")
@@ -767,7 +819,7 @@ def _java_http_method_metadata(
 ) -> dict[str, object]:
     mappings = _java_http_method_mappings(declaration_node, source)
     role = str((class_info or {}).get("role", ""))
-    if not mappings or not role:
+    if not mappings or not role or not (class_info or {}).get("base_paths_resolved", True):
         return {}
     bases = list((class_info or {}).get("base_paths", [""])) or [""]
     routes = [

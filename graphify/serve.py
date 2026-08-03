@@ -1268,6 +1268,8 @@ def _render_java_call_flow(
         and not _java_is_test_node(G, src)
         and not _java_is_test_node(G, tgt)
     ]
+    from graphify.bridges import derive_java_method_name_bridges
+    call_records.extend(derive_java_method_name_bridges(G))
     call_records.extend(_java_interface_dispatch_records(G, records, owners))
     lines = [title]
     if mapping:
@@ -1289,13 +1291,14 @@ def _render_java_call_flow(
     for values in incoming.values():
         values.sort(key=lambda item: _java_flow_symbol(G, item[0], owners))
 
+    max_depth = min(64, max(8, token_budget // 250))
     lines.append("Upstream calls:")
     upstream: list[tuple[int, str, str, dict]] = []
     upstream_queue: list[tuple[str, int]] = [(endpoint, 0)]
     upstream_seen = {endpoint}
     while upstream_queue:
         tgt, depth = upstream_queue.pop(0)
-        if depth >= 8:
+        if depth >= max_depth:
             continue
         for src, data in incoming.get(tgt, []):
             if not _java_flow_source(G, src):
@@ -1327,13 +1330,23 @@ def _render_java_call_flow(
     lines.append("Downstream calls:")
     queue: list[tuple[str, int, frozenset[str]]] = [(endpoint, 0, frozenset({endpoint}))]
     rendered = 0
+    rendered_edges: set[tuple[str, str, str, str]] = set()
     while queue:
         src, depth, ancestors = queue.pop(0)
-        if depth >= 8:
+        if depth >= max_depth:
             continue
         for tgt, data in outgoing.get(src, []):
             if not _java_flow_source(G, tgt):
                 continue
+            edge_key = (
+                src,
+                tgt,
+                str(data.get("relation") or "calls"),
+                str(data.get("bridge_strategy") or ""),
+            )
+            if edge_key in rendered_edges:
+                continue
+            rendered_edges.add(edge_key)
             rendered += 1
             evidence = _java_flow_edge_source(data)
             at = f" at={evidence}" if evidence else ""

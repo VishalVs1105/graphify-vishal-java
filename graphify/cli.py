@@ -2228,8 +2228,13 @@ def dispatch_command(cmd: str) -> None:
             merged = _nx.compose(merged, prefixed)
         merged.graph["graphify_merged"] = True
         merged.graph["repos"] = repo_tags
-        from graphify.bridges import infer_java_http_route_bridges, infer_java_service_bridges
+        from graphify.bridges import (
+            infer_java_http_route_bridges,
+            infer_java_method_name_bridges,
+            infer_java_service_bridges,
+        )
         route_bridges_added = infer_java_http_route_bridges(merged)
+        method_bridges_added = infer_java_method_name_bridges(merged)
         name_bridges_added = infer_java_service_bridges(merged)
         bridges_added = 0
         if bridges_path is not None:
@@ -2261,6 +2266,11 @@ def dispatch_command(cmd: str) -> None:
         print(f"Merged {len(graphs)} graphs -> {merged.number_of_nodes()} nodes, {merged.number_of_edges()} edges")
         if route_bridges_added:
             print(f"Added {route_bridges_added} inferred Java HTTP route bridge relationship(s)")
+        if method_bridges_added:
+            print(
+                f"Added {method_bridges_added} inferred Java "
+                "Repository-to-Controller method bridge relationship(s)"
+            )
         if name_bridges_added:
             print(f"Added {name_bridges_added} inferred Java Client-to-Controller bridge relationship(s)")
         if bridges_path is not None:
