@@ -72,6 +72,38 @@ def test_merge_graphs_same_named_repo_dirs_do_not_collapse(tmp_path):
     assert labels == {"app.js", "App.jsx"}, f"both entities preserved; got {labels}"
 
 
+def test_merge_graphs_does_not_materialize_dangling_endpoints(tmp_path):
+    """Unresolved external edges must not become empty repo-prefixed nodes."""
+    a = tmp_path / "repo-a" / "graphify-out" / "graph.json"
+    b = tmp_path / "repo-b" / "graphify-out" / "graph.json"
+    a.parent.mkdir(parents=True)
+    b.parent.mkdir(parents=True)
+    a.write_text(json.dumps({
+        "directed": False,
+        "multigraph": False,
+        "nodes": [{"id": "a", "label": "A", "source_file": "A.java"}],
+        "links": [{
+            "source": "a",
+            "target": "unresolved_external",
+            "relation": "imports",
+        }],
+    }), encoding="utf-8")
+    b.write_text(json.dumps({
+        "directed": False,
+        "multigraph": False,
+        "nodes": [{"id": "b", "label": "B", "source_file": "B.java"}],
+        "links": [],
+    }), encoding="utf-8")
+    out = tmp_path / "merged.json"
+
+    r = _run(["merge-graphs", str(a), str(b), "--out", str(out)], tmp_path)
+    assert r.returncode == 0, r.stderr
+
+    merged = json.loads(out.read_text(encoding="utf-8"))
+    assert {node["label"] for node in merged["nodes"]} == {"A", "B"}
+    assert merged["links"] == []
+
+
 def test_distinct_repo_tags_unit(tmp_path):
     from graphify.build import distinct_repo_tags
     # distinct repo dirs pass through unchanged

@@ -340,6 +340,28 @@ def test_cluster_only_graph_in_graphify_out_writes_beside_it(tmp_path):
     assert not (cwd / "graphify-out").exists()             # no CWD pollution
 
 
+def test_cluster_only_preserves_merged_graph_metadata(tmp_path):
+    """Re-clustering must not make a merged graph look like an individual repo."""
+    out = _make_graph(tmp_path)
+    graph_path = out / "graph.json"
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+    data["graph"] = {
+        "graphify_merged": True,
+        "repos": ["checkout-service", "payment-service"],
+    }
+    graph_path.write_text(json.dumps(data), encoding="utf-8")
+
+    r = _run(["cluster-only", ".", "--no-viz", "--no-label"], tmp_path)
+    assert r.returncode == 0, r.stderr
+
+    clustered = json.loads(graph_path.read_text(encoding="utf-8"))
+    assert clustered["graph"]["graphify_merged"] is True
+    assert clustered["graph"]["repos"] == [
+        "checkout-service",
+        "payment-service",
+    ]
+
+
 def test_extract_out_does_not_pollute_corpus(tmp_path):
     """#1747 Case 1: `extract <corpus> --out <elsewhere>` must not leave a stray
     graphify-out/ (cache, stat-index) inside the scanned corpus."""

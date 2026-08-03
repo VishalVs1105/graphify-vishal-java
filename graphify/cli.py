@@ -1679,6 +1679,14 @@ def dispatch_command(cmd: str) -> None:
         _raw = json.loads(graph_json.read_text(encoding="utf-8"))
         _directed = bool(_raw.get("directed", False))
         G = build_from_json(_raw, directed=_directed)
+        # ``build_from_json`` reconstructs nodes and edges but intentionally
+        # does not consume NetworkX's top-level ``graph`` metadata. Preserve it
+        # for this read-modify-write command so re-clustering a merged graph
+        # cannot erase ``graphify_merged`` or its repository list. Agent skills
+        # use that marker to select the combined service graph.
+        _graph_metadata = _raw.get("graph")
+        if isinstance(_graph_metadata, dict):
+            G.graph.update(_graph_metadata)
         print(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
         stages.mark("load")
         print("Re-clustering...")
@@ -2139,6 +2147,37 @@ def dispatch_command(cmd: str) -> None:
             # via node_link_data but older runs may have used "edges" (#738).
             if "links" not in data and "edges" in data:
                 data = dict(data, links=data["edges"])
+            # Raw AST output may contain an edge to an unresolved external
+            # symbol without emitting a corresponding node. NetworkX's
+            # node-link loader silently materializes such endpoints as empty
+            # nodes; after repository prefixing those became malformed ghosts
+            # in the merged graph. Drop dangling input links here, matching the
+            # normal build loader's behavior, so every merged node has real
+            # extraction evidence and attributes.
+            _input_node_ids: set[object] = set()
+            for _node in data.get("nodes", []):
+                if not isinstance(_node, dict) or "id" not in _node:
+                    continue
+                try:
+                    _input_node_ids.add(_node["id"])
+                except TypeError:
+                    continue
+
+            def _has_known_endpoints(_link: object) -> bool:
+                if not isinstance(_link, dict):
+                    return False
+                try:
+                    return (
+                        _link.get("source") in _input_node_ids
+                        and _link.get("target") in _input_node_ids
+                    )
+                except TypeError:
+                    return False
+
+            _valid_links = [
+                link for link in data.get("links", [])
+                if _has_known_endpoints(link)
+            ]
             # Preserve stored edge direction across undirected node_link_graph (#2261).
             # Mirrors cli.py's query pattern and export.py's _src/_tgt restoration.
             # Keep in-file markers when present (#2309): unconditionally
@@ -2152,7 +2191,7 @@ def dispatch_command(cmd: str) -> None:
                         "_src": link.get("_src", link.get("source")),
                         "_tgt": link.get("_tgt", link.get("target")),
                     }
-                    for link in data.get("links", [])
+                    for link in _valid_links
                 ],
             )
             try:
