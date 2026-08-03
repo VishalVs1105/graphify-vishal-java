@@ -194,6 +194,77 @@ def test_query_cli_requires_repo_when_http_route_is_ambiguous(monkeypatch, tmp_p
     assert "Retry with the service/repository name" in out
 
 
+def _write_java_interface_flow_graph(tmp_path):
+    G = nx.Graph()
+    nodes = [
+        ("controller_class", "AddonController", "rcom-catalog-ds", "api/src/main/java/app/AddonController.java", "L40"),
+        ("controller_method", ".getAddonDetailsByExternalIds()", "rcom-catalog-ds", "api/src/main/java/app/AddonController.java", "L57"),
+        ("service_interface", "AddonService", "rcom-catalog-ds", "api/src/main/java/app/AddonService.java", "L10"),
+        ("service_method", ".getAddonDetailsByExternalIds()", "rcom-catalog-ds", "api/src/main/java/app/AddonService.java", "L15"),
+        ("service_impl", "AddonServiceImpl", "rcom-catalog-ds", "api/src/main/java/app/AddonServiceImpl.java", "L20"),
+        ("impl_method", ".getAddonDetailsByExternalIds()", "rcom-catalog-ds", "api/src/main/java/app/AddonServiceImpl.java", "L39"),
+        ("repository_class", "BizCatalogRepository", "rcom-catalog-ds", "api/src/main/java/app/BizCatalogRepository.java", "L22"),
+        ("repository_method", ".getProductOfferingByExternalIds()", "rcom-catalog-ds", "api/src/main/java/app/BizCatalogRepository.java", "L25"),
+        ("test_class", "AddonControllerTest", "rcom-catalog-ds", "api/src/test/java/app/AddonControllerTest.java", "L40"),
+        ("test_method", ".getAddonDetailsByExternalIds()", "rcom-catalog-ds", "api/src/test/java/app/AddonControllerTest.java", "L54"),
+    ]
+    for node_id, label, repo, source, location in nodes:
+        G.add_node(
+            node_id,
+            label=label,
+            repo=repo,
+            source_file=source,
+            source_location=location,
+        )
+    G.add_node("response_entity", label="ResponseEntity", repo="rcom-catalog-ds")
+    G.nodes["controller_method"]["metadata"] = {
+        "java_http_role": "inbound",
+        "java_http_routes": [{"method": "GET", "path": "/v1/remote/addons/details"}],
+    }
+    for owner, method in (
+        ("controller_class", "controller_method"),
+        ("service_interface", "service_method"),
+        ("service_impl", "impl_method"),
+        ("repository_class", "repository_method"),
+        ("test_class", "test_method"),
+    ):
+        G.add_edge(owner, method, relation="method", confidence="EXTRACTED")
+    G.add_edge(
+        "service_impl", "service_interface",
+        relation="implements", confidence="EXTRACTED",
+        _src="service_impl", _tgt="service_interface",
+    )
+    G.add_edge("test_method", "controller_method", relation="calls", confidence="INFERRED")
+    G.add_edge("controller_method", "service_method", relation="calls", confidence="INFERRED")
+    G.add_edge("controller_method", "response_entity", relation="calls", confidence="EXTRACTED")
+    G.add_edge("impl_method", "repository_method", relation="calls", confidence="INFERRED")
+    graph_path = tmp_path / "java-interface-flow.json"
+    graph_path.write_text(json.dumps(json_graph.node_link_data(G, edges="links")))
+    return graph_path
+
+
+def test_query_cli_follows_java_interface_dispatch_and_omits_noise(
+    monkeypatch, tmp_path, capsys,
+):
+    graph_path = _write_java_interface_flow_graph(tmp_path)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(mainmod.sys, "argv", [
+        "graphify", "query",
+        "Explain the complete flow of GET /v1/remote/addons/details in rcom-catalog-ds",
+        "--graph", str(graph_path),
+    ])
+
+    mainmod.main()
+    out = capsys.readouterr().out
+    assert "AddonController.getAddonDetailsByExternalIds() --calls" in out
+    assert "AddonService.getAddonDetailsByExternalIds() --dispatches_to" in out
+    assert "bridge=java_interface_dispatch" in out
+    assert "AddonServiceImpl.getAddonDetailsByExternalIds() --calls" in out
+    assert "BizCatalogRepository.getProductOfferingByExternalIds()" in out
+    assert "AddonControllerTest" not in out
+    assert "ResponseEntity" not in out
+
+
 def _write_calls_graph(tmp_path):
     """A single directed `calls` edge on an (on-disk) undirected graph.json,
 

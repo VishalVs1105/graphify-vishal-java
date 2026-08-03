@@ -1126,6 +1126,78 @@ def _java_method_owners(G: nx.Graph, records: list[tuple[str, str, dict]]) -> di
     return owners
 
 
+def _java_is_test_node(G: nx.Graph, node_id: str) -> bool:
+    """Return whether a Java graph node comes from non-production test code."""
+    source = str(G.nodes[node_id].get("source_file") or "").replace("\\", "/").casefold()
+    if not source:
+        return False
+    if re.search(r"(?:^|/)(?:test|tests|integrationtest|integration-test)(?:/|$)", source):
+        return True
+    filename = source.rsplit("/", 1)[-1]
+    return bool(re.search(r"(?:test|tests|it)\.java$", filename))
+
+
+def _java_interface_dispatch_records(
+    G: nx.Graph,
+    records: list[tuple[str, str, dict]],
+    owners: dict[str, str],
+) -> list[tuple[str, str, dict]]:
+    """Derive interface-method -> implementation-method runtime dispatch edges.
+
+    Java call sites normally target the declared field type, so a controller's
+    call ends at ``AddonService.method()`` even though Spring invokes
+    ``AddonServiceImpl.method()``.  The graph already contains the extracted
+    class ``implements`` interface relationship and both method declarations;
+    this joins those facts for flow rendering without mutating the graph.
+    """
+    methods_by_owner_and_label: dict[tuple[str, str], list[str]] = {}
+    for method_id, owner_id in owners.items():
+        label = str(G.nodes[method_id].get("label") or "")
+        methods_by_owner_and_label.setdefault((owner_id, label), []).append(method_id)
+
+    implementing_classes: dict[str, set[str]] = {}
+    for src, tgt, data in records:
+        if data.get("relation") == "implements" and src in G and tgt in G:
+            implementing_classes.setdefault(tgt, set()).add(src)
+
+    derived: list[tuple[str, str, dict]] = []
+    for interface_method, interface_owner in owners.items():
+        implementations = implementing_classes.get(interface_owner, set())
+        if not implementations:
+            continue
+        method_label = str(G.nodes[interface_method].get("label") or "")
+        candidates = sorted({
+            method_id
+            for class_id in implementations
+            for method_id in methods_by_owner_and_label.get((class_id, method_label), [])
+            if method_id != interface_method
+        })
+        if not candidates:
+            continue
+        strategy = (
+            "java_interface_dispatch"
+            if len(candidates) == 1
+            else "java_interface_dispatch_branch"
+        )
+        score = 0.95 if len(candidates) == 1 else 0.75
+        for implementation_method in candidates:
+            method_data = G.nodes[implementation_method]
+            derived.append((
+                interface_method,
+                implementation_method,
+                {
+                    "relation": "dispatches_to",
+                    "confidence": "INFERRED",
+                    "confidence_score": score,
+                    "bridge_strategy": strategy,
+                    "dispatch_candidates": len(candidates),
+                    "source_file": method_data.get("source_file", ""),
+                    "source_location": method_data.get("source_location", ""),
+                },
+            ))
+    return derived
+
+
 def _java_flow_symbol(G: nx.Graph, node_id: str, owners: dict[str, str]) -> str:
     data = G.nodes[node_id]
     label = str(data.get("label") or node_id)
@@ -1167,6 +1239,9 @@ def _java_flow_edge_details(data: dict) -> str:
     score = data.get("confidence_score")
     if score is not None:
         details.append(f"score={score}")
+    candidates = data.get("dispatch_candidates")
+    if candidates and int(candidates) > 1:
+        details.append(f"possible_implementations={candidates}")
     return "; ".join(details)
 
 
@@ -1190,7 +1265,10 @@ def _render_java_call_flow(
         (src, tgt, data)
         for src, tgt, data in records
         if data.get("relation") == "calls" and src in G and tgt in G
+        and not _java_is_test_node(G, src)
+        and not _java_is_test_node(G, tgt)
     ]
+    call_records.extend(_java_interface_dispatch_records(G, records, owners))
     lines = [title]
     if mapping:
         lines.append(f"Route: {mapping}")
@@ -1198,6 +1276,7 @@ def _render_java_call_flow(
         "Method mapping:",
         f"  {_java_flow_symbol(G, endpoint, owners)}",
         f"  Source: {_java_flow_source(G, endpoint) or '(no source location)'}",
+        "Scope: production Java flow (test callers and source-less framework wrappers omitted)",
     ])
 
     outgoing: dict[str, list[tuple[str, dict]]] = {}
@@ -1219,6 +1298,8 @@ def _render_java_call_flow(
         if depth >= 8:
             continue
         for src, data in incoming.get(tgt, []):
+            if not _java_flow_source(G, src):
+                continue
             upstream.append((depth + 1, src, tgt, data))
             if src not in upstream_seen:
                 upstream_seen.add(src)
@@ -1234,8 +1315,9 @@ def _render_java_call_flow(
         for number, (_depth, src, tgt, data) in enumerate(upstream, 1):
             evidence = _java_flow_edge_source(data)
             at = f" at={evidence}" if evidence else ""
+            relation = str(data.get("relation") or "calls")
             lines.append(
-                f"  {number}. {_java_flow_symbol(G, src, owners)} --calls "
+                f"  {number}. {_java_flow_symbol(G, src, owners)} --{relation} "
                 f"[{_java_flow_edge_details(data)}]--> "
                 f"{_java_flow_symbol(G, tgt, owners)}{at}"
             )
@@ -1250,11 +1332,14 @@ def _render_java_call_flow(
         if depth >= 8:
             continue
         for tgt, data in outgoing.get(src, []):
+            if not _java_flow_source(G, tgt):
+                continue
             rendered += 1
             evidence = _java_flow_edge_source(data)
             at = f" at={evidence}" if evidence else ""
+            relation = str(data.get("relation") or "calls")
             lines.append(
-                f"  {rendered}. {_java_flow_symbol(G, src, owners)} --calls "
+                f"  {rendered}. {_java_flow_symbol(G, src, owners)} --{relation} "
                 f"[{_java_flow_edge_details(data)}]--> "
                 f"{_java_flow_symbol(G, tgt, owners)}{at}"
             )

@@ -31,5 +31,8 @@ For a method flow, include `Class.method` and the service name:
 
 These queries return a deterministic `JAVA API FLOW` or `JAVA METHOD FLOW`
 section anchored on extracted Spring/Feign route metadata and directed `calls`
-edges. Present that section directly. If it reports ambiguity, ask for the
-service/repository or use one of the listed exact node IDs; do not guess.
+edges. The flow follows an interface call into its Java implementation when the
+graph contains an `implements` relationship. Test callers and source-less
+framework wrappers are omitted from the production business flow. Present that
+section directly. If it reports ambiguity, ask for the service/repository or
+use one of the listed exact node IDs; do not guess.
