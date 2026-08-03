@@ -11,6 +11,10 @@ allowed-tools:
 
 # /graphify
 
+Explicit graph commands are `/graphify query <architecture question>`,
+`/graphify path <source type> <target type>`, and `/graphify explain <type or
+method>`.
+
 Graphify extracts `.java` files only. For one service run `graphify extract
 <service>`. For multiple services, extract each service and run:
 
@@ -27,6 +31,13 @@ and normalized Spring/Feign route, then falls back to a unique same-stem
 `*Client`/`*Controller` pair. Use `--bridges <file.json>` only for unresolved
 dynamic routes or an explicit fallback.
 
+For those explicit commands, locate the graph whose metadata has
+`graph.graphify_merged: true` and pass its absolute path with `--graph`. Answer
+only from command output. Do not open, search, or infer from `.java` files. Ask
+for missing arguments and report insufficient graph evidence instead of using
+source as a fallback.
+
 When the graph exists, answer codebase questions by running `graphify query
-"<question>"`; do not rebuild individual services. Use `graphify path` for a
-specific call chain and `graphify explain` for one symbol.
+"<question>" --graph "<absolute-merged-graph.json>"`; do not rebuild individual
+services. Use `graphify path` for a specific call chain and `graphify explain`
+for one symbol.

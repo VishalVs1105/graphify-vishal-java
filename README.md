@@ -154,13 +154,17 @@ After installing the integration, build both service graphs in one request:
 Then ask questions against the merged graph:
 
 ```text
-/graphify trace CheckoutController to StripeGateway
-/graphify what calls PaymentProcessor?
-/graphify explain the checkout-to-payment flow
+/graphify query How does CheckoutController reach StripeGateway?
+/graphify path CheckoutController StripeGateway
+/graphify explain PaymentProcessor
 ```
 
 The graph-first agent workflow runs `graphify query`, `graphify path`, or
-`graphify explain` against the existing root `graphify-out/graph.json`.
+`graphify explain` against the existing root `graphify-out/graph.json`. These
+explicit commands are graph-only: the agent prefers a graph marked
+`graph.graphify_merged: true`, passes its absolute path to the CLI, and does not
+fall back to reading Java files. `/graphify query` by itself is incomplete; add
+the architecture question after `query`.
 
 ## Useful commands
 

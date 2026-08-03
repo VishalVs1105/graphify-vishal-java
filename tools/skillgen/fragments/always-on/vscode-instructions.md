@@ -14,4 +14,8 @@ only for broad architecture review or when query/path/explain do not surface eno
 source files when (a) modifying/debugging specific code, (b) the graph lacks the needed detail, or
 (c) the graph is missing or stale.
 
+An explicit `/graphify query`, `/graphify path`, or `/graphify explain` request is graph-only. Locate
+the merged `graphify-out/graph.json` (`graph.graphify_merged: true`), pass its absolute path with
+`--graph`, and never fall back to `.java` files. If arguments or graph evidence are missing, say so.
+
 Type `/graphify` in Copilot Chat to build or update the graph.

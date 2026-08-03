@@ -15,7 +15,25 @@ services. Non-Java files are ignored automatically.
 /graphify <java-service>
 /graphify <service1> <service2> [service3 ...]
 /graphify <question about the existing graph>
+/graphify query <architecture question>
+/graphify path <source type> <target type>
+/graphify explain <type or method>
 ```
+
+## Explicit graph commands
+
+Treat `/graphify query`, `/graphify path`, and `/graphify explain` as strict
+graph-only requests:
+
+1. Require the question or operands shown above. If they are missing, ask for
+   them and do not inspect source files.
+2. Locate `graphify-out/graph.json` from the workspace root and its parent
+   workspace directories. When more than one graph exists, prefer the graph
+   whose JSON metadata has `graph.graphify_merged` set to `true`.
+3. Pass that graph explicitly with `--graph "<absolute-path>"`.
+4. Answer only from command output. Do not open, search, or infer from `.java`
+   files. If the graph lacks the answer, report insufficient graph evidence and
+   recommend rebuilding or re-merging it.
 
 ## Workflow
 
@@ -23,7 +41,7 @@ services. Non-Java files are ignored automatically.
    codebase question, do not rebuild. Run:
 
    ```bash
-   graphify query "<question>"
+   graphify query "<question>" --graph "<absolute-path-to-merged-graph.json>"
    ```
 
    Answer only from the returned graph evidence. Say when the graph does not
@@ -58,8 +76,9 @@ services. Non-Java files are ignored automatically.
    bridge contract as described in `references/github-and-merge.md`.
 
 5. After graph creation, use `graphify query`, `graphify path`, or
-   `graphify explain`. Subsequent `/graphify` questions must use the merged root
-   graph instead of rebuilding individual services.
+   `graphify explain`, always with `--graph` pointing at the merged root graph.
+   Subsequent `/graphify` questions must use that merged graph instead of
+   rebuilding or reading individual services.
 
 ## GitHub repositories
 

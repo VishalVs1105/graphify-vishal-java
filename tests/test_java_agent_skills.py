@@ -22,6 +22,10 @@ def test_generated_agent_skills_are_java_only_and_query_merged_graph():
         assert "Java" in body
         assert "graphify merge-graphs" in body
         assert "graphify query" in body
+        assert "/graphify query <architecture question>" in body
+        assert "graph.graphify_merged" in body
+        assert "--graph" in body
+        assert "Do not open, search, or infer from `.java`" in body
         assert "--java-only" not in body
 
 
@@ -57,6 +61,9 @@ def test_copilot_install_contains_java_merge_workflow(tmp_path: Path):
     body = skill.read_text(encoding="utf-8")
     assert "graphify merge-graphs" in body
     assert "graphify query" in body
+    assert "/graphify query <architecture question>" in body
+    assert "graph.graphify_merged" in body
+    assert "Do not open, search, or infer from `.java`" in body
     refs = skill.parent / "references"
     assert sorted(path.name for path in refs.iterdir()) == [
         "github-and-merge.md",
