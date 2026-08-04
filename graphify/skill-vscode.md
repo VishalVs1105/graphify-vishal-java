@@ -30,7 +30,9 @@ graph-only requests:
 2. Locate `graphify-out/graph.json` from the workspace root and its parent
    workspace directories. When more than one graph exists, prefer the graph
    whose JSON metadata has `graph.graphify_merged` set to `true`.
-3. Pass that graph explicitly with `--graph "<absolute-path>"`.
+3. Pass that graph explicitly with `--graph "<absolute-path>"`. For `query`,
+   always pass `--budget 60000` so complete multi-service Java flows are not
+   shortened by the normal interactive output budget.
 4. Answer only from command output. Do not open, search, or infer from `.java`
    files. If the graph lacks the answer, report insufficient graph evidence and
    recommend rebuilding or re-merging it.
@@ -45,7 +47,7 @@ graph-only requests:
    codebase question, do not rebuild. Run:
 
    ```bash
-   graphify query "<question>" --graph "<absolute-path-to-merged-graph.json>"
+   graphify query "<question>" --budget 60000 --graph "<absolute-path-to-merged-graph.json>"
    ```
 
    Answer only from the returned graph evidence. Say when the graph does not

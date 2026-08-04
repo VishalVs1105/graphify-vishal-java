@@ -468,6 +468,24 @@ def test_query_cli_renders_ordered_three_repo_service_calls_and_context_branch(
     assert "non-matching same-service method alternative(s) omitted" in out
 
 
+def test_query_cli_default_budget_does_not_create_an_eight_hop_false_terminal(
+    monkeypatch, tmp_path, capsys,
+):
+    graph_path = _write_three_repo_java_flow_graph(tmp_path)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(mainmod.sys, "argv", [
+        "graphify", "query",
+        "Explain the complete flow of GET /v1/remote/addons/details in rcom-catalog-ds",
+        "--graph", str(graph_path),
+    ])
+
+    mainmod.main()
+    out = capsys.readouterr().out
+    assert "ContentfulServiceImpl.getAddonEntries()" in out
+    assert "ContentfulServiceImpl.getAddonEntries() (unresolved service leaf" not in out
+    assert "RedisRepository.hasKey()" in out or "[!] TRUNCATED:" in out
+
+
 def test_query_cli_continues_deep_java_flow_to_recorded_leaf(monkeypatch, tmp_path, capsys):
     G = nx.Graph()
     methods = []

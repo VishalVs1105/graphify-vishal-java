@@ -95,6 +95,9 @@ When a repository method performs multiple operations, each direct call is
 shown in Java source order and traversal continues through the operation with
 downstream evidence. Installed agent skills require deterministic Java-flow
 stdout to be reproduced verbatim so Copilot cannot shorten or rewrite terminals.
+They invoke flow queries with `--budget 60000`; traversal correctness is kept
+separate from output-size limiting, so the default CLI budget cannot turn an
+intermediate eighth hop into a false terminal.
 
 When route metadata is unavailable, Graphify also connects a unique outbound
 `*Client` type to a same-stem `*Controller` type in another repository:

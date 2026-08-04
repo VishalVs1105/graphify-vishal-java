@@ -1323,7 +1323,12 @@ def _render_java_call_flow(
     for values in incoming.values():
         values.sort(key=lambda item: _java_flow_symbol(G, item[0], owners))
 
-    max_depth = min(64, max(8, token_budget // 250))
+    # The output budget controls presentation size, not graph correctness.
+    # Coupling traversal depth to the default 2,000-token budget previously
+    # stopped an otherwise valid Java E2E flow after eight hops and mislabeled
+    # that eighth node as a terminal. Build the complete bounded flow first;
+    # _cut_lines_to_budget will report any presentation truncation honestly.
+    max_depth = 64
     lines.append("Upstream calls:")
     upstream: list[tuple[int, str, str, dict]] = []
     upstream_queue: list[tuple[str, int]] = [(endpoint, 0)]
@@ -1522,12 +1527,13 @@ def _render_java_call_flow(
         if not orchestration_edges:
             lines.append(f"  {_java_flow_symbol(G, endpoint, owners)}")
 
-        service_paths: list[list[tuple[str, str, dict]]] = []
+        service_paths: list[tuple[list[tuple[str, str, dict]], bool]] = []
         contextual_alternatives_omitted = 0
         for first_target, first_data in service_starts:
             path = [(orchestration_current, first_target, first_data)]
             ancestors = orchestration_ancestors | {first_target}
             current = first_target
+            depth_limited = False
             for _depth in range(max_depth - 1):
                 candidates = primary_candidates(current, ancestors)
                 if not candidates:
@@ -1600,11 +1606,13 @@ def _render_java_call_flow(
                     path.append((current, target, data))
                     ancestors |= {target}
                 current = target
-            service_paths.append(path)
+            else:
+                depth_limited = bool(primary_candidates(current, ancestors))
+            service_paths.append((path, depth_limited))
 
         lines.append("E2E service calls:")
         all_path_keys: set[tuple[str, str, str, str]] = set()
-        for call_number, path in enumerate(service_paths, 1):
+        for call_number, (path, depth_limited) in enumerate(service_paths, 1):
             target_repos = []
             for _src, tgt, _data in path:
                 repo = str(G.nodes[tgt].get("repo") or "").strip()
@@ -1615,11 +1623,17 @@ def _render_java_call_flow(
             for step_number, (src, tgt, data) in enumerate(path, 1):
                 all_path_keys.add(edge_key(src, tgt, data))
                 render_edge(f"    {step_number}. ", src, tgt, data)
-            terminal = path[-1][1]
-            lines.append(
-                f"    Terminal: {_java_flow_symbol(G, terminal, owners)} "
-                f"({terminal_reason(terminal)})"
-            )
+            if depth_limited:
+                lines.append(
+                    "    Traversal stopped: Java flow depth limit reached; "
+                    "the last shown node is not a confirmed terminal."
+                )
+            else:
+                terminal = path[-1][1]
+                lines.append(
+                    f"    Terminal: {_java_flow_symbol(G, terminal, owners)} "
+                    f"({terminal_reason(terminal)})"
+                )
 
         response_edges = []
         used_keys = {
@@ -1652,6 +1666,7 @@ def _render_java_call_flow(
     primary_nodes = [endpoint]
     ancestors = frozenset({endpoint})
     current = endpoint
+    primary_depth_limited = False
     for _depth in range(max_depth):
         candidates = primary_candidates(current, ancestors)
         if not candidates:
@@ -1661,6 +1676,8 @@ def _render_java_call_flow(
         primary_nodes.append(target)
         ancestors |= {target}
         current = target
+    else:
+        primary_depth_limited = bool(primary_candidates(current, ancestors))
 
     lines.append("Primary end-to-end path:")
     if primary_edges:
@@ -1677,7 +1694,7 @@ def _render_java_call_flow(
         lines.append("  (none recorded in the graph)")
 
     primary_keys = {edge_key(src, tgt, data) for src, tgt, data in primary_edges}
-    supporting: list[tuple[list[tuple[str, str, dict]], bool]] = []
+    supporting: list[tuple[list[tuple[str, str, dict]], bool, bool]] = []
     supporting_seen: set[tuple[str, str, str, str]] = set()
     for primary_node in primary_nodes:
         for target, data in outgoing.get(primary_node, []):
@@ -1694,6 +1711,7 @@ def _render_java_call_flow(
             collapsed = is_internal_detail(target)
             branch_ancestors = frozenset(branch)
             branch_current = target
+            branch_depth_limited = False
             for _depth in range(max_depth - 1):
                 if collapsed:
                     break
@@ -1710,11 +1728,17 @@ def _render_java_call_flow(
                 branch_ancestors |= {next_target}
                 branch_current = next_target
                 collapsed = is_internal_detail(next_target)
-            supporting.append((branch_edges, collapsed))
+            else:
+                branch_depth_limited = bool(
+                    primary_candidates(branch_current, branch_ancestors)
+                )
+            supporting.append((branch_edges, collapsed, branch_depth_limited))
 
     if supporting:
         lines.append("Supporting branches:")
-        for branch_number, (branch_edges, collapsed) in enumerate(supporting[:12], 1):
+        for branch_number, (branch_edges, collapsed, depth_limited) in enumerate(
+            supporting[:12], 1
+        ):
             lines.append(f"  Branch {branch_number}:")
             for step_number, (src, tgt, data) in enumerate(branch_edges, 1):
                 evidence = _java_flow_edge_source(data)
@@ -1726,7 +1750,12 @@ def _render_java_call_flow(
                     f"{_java_flow_symbol(G, tgt, owners)}{at}"
                 )
             terminal = branch_edges[-1][1]
-            if collapsed:
+            if depth_limited:
+                lines.append(
+                    "    Traversal stopped: Java flow depth limit reached; "
+                    "the last shown node is not a confirmed terminal."
+                )
+            elif collapsed:
                 lines.append("    Further mapper/helper internals collapsed.")
             else:
                 folded = owner_label(terminal).casefold()
@@ -1740,7 +1769,12 @@ def _render_java_call_flow(
         if len(supporting) > 12:
             lines.append(f"  ... {len(supporting) - 12} additional branch(es) omitted")
 
-    if primary_nodes and primary_nodes[-1] != endpoint:
+    if primary_depth_limited:
+        lines.append(
+            "Primary traversal stopped: Java flow depth limit reached; "
+            "the last shown node is not a confirmed terminal."
+        )
+    elif primary_nodes and primary_nodes[-1] != endpoint:
         terminal = primary_nodes[-1]
         folded = owner_label(terminal).casefold()
         if folded.endswith(("repository", "gateway", "client", "connector", "adapter")):

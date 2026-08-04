@@ -5,7 +5,7 @@ are present, select the one whose JSON metadata has
 `graph.graphify_merged: true`, resolve its absolute path, and pass it explicitly.
 
 ```bash
-graphify query "How does checkout call payment?" --graph "<absolute-merged-graph.json>"
+graphify query "How does checkout call payment?" --budget 60000 --graph "<absolute-merged-graph.json>"
 graphify path "CheckoutController" "StripeGateway" --graph "<absolute-merged-graph.json>"
 graphify explain "PaymentClient" --graph "<absolute-merged-graph.json>"
 ```
@@ -51,3 +51,7 @@ context-filtering note, and exact `Terminal:` line. Before responding, verify
 that the last numbered step and each terminal match stdout. If it reports
 ambiguity, ask for the service/repository or use one of the listed exact node
 IDs; do not guess.
+
+Always invoke `graphify query` with `--budget 60000`. This is the complete-flow
+budget used by the agent workflow; the ordinary CLI default is intended for
+short interactive answers.
