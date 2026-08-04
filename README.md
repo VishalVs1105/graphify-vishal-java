@@ -93,9 +93,11 @@ selection, repository/gateway calls outrank local helpers so the rendered path
 ends at the recorded data or external boundary instead of a response model.
 When a repository method performs multiple operations, each direct call is
 shown in Java source order and traversal continues through the operation with
-downstream evidence. Installed agent skills require deterministic Java-flow
-stdout to be reproduced verbatim so Copilot cannot shorten or rewrite terminals.
-They invoke flow queries with `--budget 60000`; traversal correctness is kept
+downstream evidence. Installed agent skills use deterministic Java-flow stdout
+as an evidence checklist, then require Copilot to produce a readable
+architectural walkthrough covering every hop, service path, and terminal rather
+than echoing the command output. They invoke flow queries with `--budget 60000`;
+traversal correctness is kept
 separate from output-size limiting, so the default CLI budget cannot turn an
 intermediate eighth hop into a false terminal.
 

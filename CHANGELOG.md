@@ -4,6 +4,7 @@ Full release notes with details on each version: [GitHub Releases](https://githu
 
 ## 0.9.32 (unreleased)
 
+- Fix: agent skills now turn deterministic Java-flow stdout into a mandatory readable architectural walkthrough instead of echoing the CLI; the explanation must still cover every graph hop, service path, terminal, source location, and evidence status without consulting Java files.
 - Fix: agent Java-flow queries now request the complete-flow budget, and Java traversal depth is independent of the display budget; Copilot no longer stops at hop eight or reports the last budget-limited node as a genuine terminal.
 - Fix: Java API flows now preserve sibling repository operations in call-site order and continue through the operation with downstream execution evidence; agent skills must reproduce deterministic Java flow output verbatim and may no longer truncate steps or invent terminal nodes.
 - Fix: contextual Java flow selection is now limited to real same-owner handler families; after selecting the route-specific handler, repository/gateway calls outrank local helpers and Java DTO/constructor targets are omitted, preventing response payload classes from becoming false business terminals.

@@ -43,14 +43,41 @@ configuration, DTO/constructor, or mapper/helper internals are omitted or
 collapsed. After handler selection, repository/gateway calls outrank local
 helpers so a response model is never presented as the business terminal. A
 repository/external terminal means the graph has no further Java call; an
-unresolved service leaf means implementation evidence is missing. Return the
-entire `JAVA API FLOW` or `JAVA METHOD FLOW` command output verbatim in a fenced
-text block before any optional prose. Do not summarize, combine, omit, or
-renumber steps. Preserve every service call, source location, confidence marker,
-context-filtering note, and exact `Terminal:` line. Before responding, verify
-that the last numbered step and each terminal match stdout. If it reports
-ambiguity, ask for the service/repository or use one of the listed exact node
-IDs; do not guess.
+unresolved service leaf means implementation evidence is missing. Do not paste
+the `JAVA API FLOW` or `JAVA METHOD FLOW` stdout as the final answer. Translate
+it into a clear architectural walkthrough. Start with the route-to-controller
+mapping, explain the shared orchestration, then give one ordered subsection for
+every E2E service call, followed by response mapping and evidence caveats.
+Account for every numbered edge exactly once: never summarize away, combine,
+omit, or renumber graph hops. Preserve every service name, source location,
+confidence marker, context-filtering note, and terminal meaning. Before
+responding, compare the explanation against stdout and verify that each numbered
+edge and every terminal is represented. Do not add behavior not present in
+graph evidence. If stdout reports ambiguity, ask for the service/repository or
+use one of the listed exact node IDs; do not guess.
+
+Use this response shape (omit the raw stdout block unless the user explicitly
+asks for it):
+
+```text
+Endpoint
+  <verb and route> maps to <service-qualified controller method> at <source>
+
+Shared orchestration
+  <ordered controller -> interface -> implementation walkthrough>
+
+Downstream service call 1: <source service> -> <target service>
+  <ordered, explained hop-by-hop walkthrough and terminal>
+
+Downstream service call 2: ...
+  ...
+
+Response construction
+  <mapper/response edges>
+
+Evidence notes
+  <inferred bridges, confidence, filtering, and graph limitations>
+```
 
 Always invoke `graphify query` with `--budget 60000`. This is the complete-flow
 budget used by the agent workflow; the ordinary CLI default is intended for
