@@ -4,6 +4,7 @@ Full release notes with details on each version: [GitHub Releases](https://githu
 
 ## 0.9.32 (unreleased)
 
+- Fix: contextual Java flow selection is now limited to real same-owner handler families; after selecting the route-specific handler, repository/gateway calls outrank local helpers and Java DTO/constructor targets are omitted, preventing response payload classes from becoming false business terminals.
 - Fix: Java API-flow queries over three or more repositories now separate the shared endpoint orchestration from every ordered cross-service E2E call, use route context to select the relevant same-service conditional handler, and omit exception/configuration/unrelated-handler noise.
 - Fix: Java API-flow queries now render meaningful supporting service and repository branches as explicit evidence-bearing calls with their own terminal, so agents cannot overlook dependencies such as Contentful while mapper/helper internals remain collapsed.
 - Fix: incremental extraction and `_rebuild_code` no longer drop a file's other tier (#2333, #2334, #2336). Node/edge ownership was keyed on `source_file` alone, so a semantic re-extract deleted a doc's AST headings and a full rebuild deleted document AST nodes. Merge is now tier-aware (an AST re-extract replaces only AST nodes and keeps the semantic layer, and vice versa), the `_origin` provenance marker is backfilled on load so old graphs self-heal, and the full-rebuild drop is scoped to sources actually regenerated.

@@ -356,6 +356,7 @@ def _write_three_repo_java_flow_graph(tmp_path):
         ("cf_impl", "ContentfulServiceImpl", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L100"),
         ("cf_impl_method", ".getContentfulEntries()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L162"),
         ("addon_entries", ".getAddonEntries()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L182"),
+        ("cache_addon_keys", ".cacheAddonKeys()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L305"),
         ("device_entries", ".getDeviceEntries()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L177"),
         ("cart_entries", ".getCartEntries()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L186"),
         ("cache_repository", "CacheRepository", "rcom-contentful-ms", "api/src/main/java/content/CacheRepository.java", "L10"),
@@ -370,6 +371,7 @@ def _write_three_repo_java_flow_graph(tmp_path):
         ("redis_config", "RedisCacheConfig", "rcom-contentful-ms", "api/src/main/java/content/RedisCacheConfig.java", "L20"),
         ("redis_config_method", ".connectionFactory()", "rcom-contentful-ms", "api/src/main/java/content/RedisCacheConfig.java", "L60"),
         ("not_found_exception", "ContentfulDataNotFoundException", "rcom-contentful-ms", "api/src/main/java/content/ContentfulDataNotFoundException.java", "L8"),
+        ("content_payload", "ContentfulUIResponsePayload", "rcom-contentful-ms", "api/src/main/java/content/ContentfulUIResponsePayload.java", "L8"),
     ]
     for node_id, label, repo, source, location in nodes:
         G.add_node(
@@ -381,6 +383,7 @@ def _write_three_repo_java_flow_graph(tmp_path):
         ("cf_service", "cf_service_method"),
         ("cf_impl", "cf_impl_method"),
         ("cf_impl", "addon_entries"),
+        ("cf_impl", "cache_addon_keys"),
         ("cf_impl", "device_entries"),
         ("cf_impl", "cart_entries"),
         ("cache_repository", "cache_has_key"),
@@ -414,6 +417,8 @@ def _write_three_repo_java_flow_graph(tmp_path):
     G.add_edge("cf_impl_method", "cache_connection", relation="calls", confidence="INFERRED", source_location="L169")
     G.add_edge("cf_impl_method", "not_found_exception", relation="calls", confidence="EXTRACTED", source_location="L214")
     G.add_edge("addon_entries", "cache_has_key", relation="calls", confidence="INFERRED")
+    G.add_edge("addon_entries", "cache_addon_keys", relation="calls", confidence="EXTRACTED")
+    G.add_edge("cache_addon_keys", "content_payload", relation="calls", confidence="EXTRACTED")
     G.add_edge("redis_has_key", "redis_execute", relation="calls", confidence="EXTRACTED")
     G.add_edge("redis_execute", "redis_operation_execute", relation="calls", confidence="INFERRED")
     G.add_edge("redis_connection", "redis_config_method", relation="calls", confidence="INFERRED")
@@ -450,6 +455,8 @@ def test_query_cli_renders_ordered_three_repo_service_calls_and_context_branch(
     assert "getDeviceEntries" not in out
     assert "getCartEntries" not in out
     assert "ContentfulDataNotFoundException" not in out
+    assert "ContentfulUIResponsePayload" not in out
+    assert "cacheAddonKeys" not in out
     assert "RedisCacheConfig" not in out
     assert "non-matching same-service method alternative(s) omitted" in out
 

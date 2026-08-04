@@ -39,7 +39,9 @@ service. If the endpoint orchestrates multiple downstream services, the result
 shows the shared endpoint orchestration once and every cross-service call as a
 first-class E2E path in Java call-site order. Route/query terms select matching
 conditional handlers; unrelated handler alternatives, exception edges, and
-configuration or mapper/helper internals are omitted or collapsed. A
+configuration, DTO/constructor, or mapper/helper internals are omitted or
+collapsed. After handler selection, repository/gateway calls outrank local
+helpers so a response model is never presented as the business terminal. A
 repository/external terminal means the graph has no further Java call; an
 unresolved service leaf means implementation evidence is missing. Present that
 section directly. If it reports ambiguity, ask for the service/repository or use

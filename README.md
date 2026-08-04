@@ -88,7 +88,9 @@ the query keeps the shared controller/service prefix once and renders every
 cross-service call as a first-class E2E path in Java call-site order. Route
 terms select matching conditional handlers (for example, an addons route
 prefers `getAddonEntries`), while exception, unrelated handler, configuration,
-and mapper/helper noise is omitted or collapsed.
+DTO/constructor, and mapper/helper noise is omitted or collapsed. After handler
+selection, repository/gateway calls outrank local helpers so the rendered path
+ends at the recorded data or external boundary instead of a response model.
 
 When route metadata is unavailable, Graphify also connects a unique outbound
 `*Client` type to a same-stem `*Controller` type in another repository:

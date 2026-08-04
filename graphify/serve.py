@@ -1270,6 +1270,17 @@ def _render_java_call_flow(
         owner = str(G.nodes[owner_id].get("label") or "").casefold() if owner_id else ""
         return label.endswith(("exception", "error")) or owner.endswith(("exception", "error"))
 
+    def is_type_only_call_target(node_id: str) -> bool:
+        """Java constructor/DTO references are not executable method-flow steps."""
+        if node_id in owners:
+            return False
+        data = G.nodes[node_id]
+        label = str(data.get("label") or "")
+        metadata = data.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("java_http_role"):
+            return False
+        return bool(label[:1].isupper())
+
     call_records = [
         (src, tgt, data)
         for src, tgt, data in records
@@ -1277,6 +1288,7 @@ def _render_java_call_flow(
         and not _java_is_test_node(G, src)
         and not _java_is_test_node(G, tgt)
         and not is_exception_node(tgt)
+        and not is_type_only_call_target(tgt)
     ]
     from graphify.bridges import derive_java_method_name_bridges
     call_records.extend(derive_java_method_name_bridges(G))
@@ -1372,6 +1384,11 @@ def _render_java_call_flow(
     def is_internal_detail(node_id: str) -> bool:
         return detail_kind(node_id) is not None
 
+    def is_business_boundary(node_id: str) -> bool:
+        return owner_label(node_id).casefold().endswith((
+            "repository", "gateway", "client", "connector", "adapter",
+        ))
+
     def normalise_context_term(term: str) -> str:
         folded = term.casefold()
         if folded.endswith("ies") and len(folded) > 4:
@@ -1429,7 +1446,7 @@ def _render_java_call_flow(
             if item[1].get("cross_service")
             or item[0] in cross_reachable
             else 1,
-            -context_score(item[0]),
+            0 if is_business_boundary(item[0]) else 1,
             1 if is_internal_detail(item[0]) else 0,
             0 if item[1].get("relation") == "dispatches_to" else 1,
             callsite_line(item[1]),
@@ -1514,21 +1531,38 @@ def _render_java_call_flow(
                     and owners.get(item[0]) == owners.get(current)
                     and not is_internal_detail(item[0])
                 ]
-                if len(same_owner) > 1:
-                    best_context = max(context_score(target) for target, _data in same_owner)
-                    if best_context > 0:
-                        preferred = {
-                            target
-                            for target, _data in same_owner
-                            if context_score(target) == best_context
-                        }
-                        contextual_alternatives_omitted += sum(
-                            1 for target, _data in same_owner if target not in preferred
-                        )
-                        candidates = [
-                            item for item in candidates
-                            if item not in same_owner or item[0] in preferred
-                        ]
+                families: dict[str, list[tuple[str, dict]]] = {}
+                for item in same_owner:
+                    label = str(G.nodes[item[0]].get("label") or "")
+                    words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", label)
+                    tokens = re.findall(r"[A-Za-z][A-Za-z0-9]*", words)
+                    if tokens:
+                        families.setdefault(normalise_context_term(tokens[-1]), []).append(item)
+                preferred: set[str] = set()
+                for family in families.values():
+                    # Three or more same-owner methods with the same semantic
+                    # suffix are switch/strategy alternatives (getAddonEntries,
+                    # getDeviceEntries, ...), not an ordinary helper sequence.
+                    if len(family) < 3:
+                        continue
+                    best_context = max(context_score(target) for target, _data in family)
+                    if best_context <= 0:
+                        continue
+                    family_preferred = {
+                        target
+                        for target, _data in family
+                        if context_score(target) == best_context
+                    }
+                    preferred.update(family_preferred)
+                    contextual_alternatives_omitted += sum(
+                        1 for target, _data in family if target not in family_preferred
+                    )
+                    candidates = [
+                        item for item in candidates
+                        if item not in family or item[0] in family_preferred
+                    ]
+                if preferred:
+                    candidates.sort(key=lambda item: 0 if item[0] in preferred else 1)
                 target, data = candidates[0]
                 if detail_kind(target) == "configuration":
                     break
