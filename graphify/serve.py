@@ -1414,7 +1414,7 @@ def _render_java_call_flow(
         lines.append("  (none recorded in the graph)")
 
     primary_keys = {edge_key(src, tgt, data) for src, tgt, data in primary_edges}
-    supporting: list[str] = []
+    supporting: list[tuple[list[tuple[str, str, dict]], bool]] = []
     supporting_seen: set[tuple[str, str, str, str]] = set()
     for primary_node in primary_nodes:
         for target, data in outgoing.get(primary_node, []):
@@ -1427,6 +1427,7 @@ def _render_java_call_flow(
                 continue
             supporting_seen.add(first_key)
             branch = [primary_node, target]
+            branch_edges = [(primary_node, target, data)]
             collapsed = is_internal_detail(target)
             branch_ancestors = frozenset(branch)
             branch_current = target
@@ -1441,21 +1442,38 @@ def _render_java_call_flow(
                 if next_key in primary_keys or next_key in supporting_seen:
                     break
                 supporting_seen.add(next_key)
+                branch_edges.append((branch_current, next_target, next_data))
                 branch.append(next_target)
                 branch_ancestors |= {next_target}
                 branch_current = next_target
                 collapsed = is_internal_detail(next_target)
-            rendered_branch = " -> ".join(
-                _java_flow_symbol(G, node_id, owners) for node_id in branch
-            )
-            if collapsed:
-                rendered_branch += " (mapper/helper internals collapsed)"
-            supporting.append(rendered_branch)
+            supporting.append((branch_edges, collapsed))
 
     if supporting:
         lines.append("Supporting branches:")
-        for number, branch in enumerate(supporting[:12], 1):
-            lines.append(f"  {number}. {branch}")
+        for branch_number, (branch_edges, collapsed) in enumerate(supporting[:12], 1):
+            lines.append(f"  Branch {branch_number}:")
+            for step_number, (src, tgt, data) in enumerate(branch_edges, 1):
+                evidence = _java_flow_edge_source(data)
+                at = f" at={evidence}" if evidence else ""
+                relation = str(data.get("relation") or "calls")
+                lines.append(
+                    f"    {step_number}. {_java_flow_symbol(G, src, owners)} "
+                    f"--{relation} [{_java_flow_edge_details(data)}]--> "
+                    f"{_java_flow_symbol(G, tgt, owners)}{at}"
+                )
+            terminal = branch_edges[-1][1]
+            if collapsed:
+                lines.append("    Further mapper/helper internals collapsed.")
+            else:
+                folded = owner_label(terminal).casefold()
+                if folded.endswith((
+                    "repository", "gateway", "client", "connector", "adapter",
+                )):
+                    lines.append(
+                        f"    Terminal: {_java_flow_symbol(G, terminal, owners)} "
+                        "(repository/external boundary; no further Java call recorded)"
+                    )
         if len(supporting) > 12:
             lines.append(f"  ... {len(supporting) - 12} additional branch(es) omitted")
 

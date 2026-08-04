@@ -322,10 +322,12 @@ def test_query_cli_follows_java_interface_dispatch_and_omits_noise(
     assert out.index("CatalogSocRepository.findByExternalIds()") < out.index("AddonsMapper.mapAddons()")
     assert "Primary end-to-end path:" in out
     assert "Supporting branches:" in out
-    assert "mapper/helper internals collapsed" in out
-    assert "ContentfulService.getContentByResource()" in out
-    assert "ContentfulServiceImpl.getContentByResource()" in out
-    assert "ContentfulRepository.getContentfulResource()" in out
+    assert "Branch 1:" in out
+    assert "AddonServiceImpl.getContentfulMap() --calls" in out
+    assert "ContentfulService.getContentByResource() --dispatches_to" in out
+    assert "ContentfulServiceImpl.getContentByResource() --calls" in out
+    assert "Terminal: [rcom-catalog-ds] ContentfulRepository.getContentfulResource()" in out
+    assert "Further mapper/helper internals collapsed." in out
     assert "Primary terminal:" in out
     assert "CatalogSocRepository.findByExternalIds() (repository/external boundary" in out
     assert "AddonControllerTest" not in out
