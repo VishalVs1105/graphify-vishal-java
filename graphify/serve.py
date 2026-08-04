@@ -1257,16 +1257,26 @@ def _render_java_call_flow(
     *,
     title: str,
     mapping: str | None,
+    question: str,
     token_budget: int,
 ) -> str:
     records = list(_true_edge_records(G))
     owners = _java_method_owners(G, records)
+
+    def is_exception_node(node_id: str) -> bool:
+        data = G.nodes[node_id]
+        label = str(data.get("label") or "").casefold()
+        owner_id = owners.get(node_id)
+        owner = str(G.nodes[owner_id].get("label") or "").casefold() if owner_id else ""
+        return label.endswith(("exception", "error")) or owner.endswith(("exception", "error"))
+
     call_records = [
         (src, tgt, data)
         for src, tgt, data in records
         if data.get("relation") == "calls" and src in G and tgt in G
         and not _java_is_test_node(G, src)
         and not _java_is_test_node(G, tgt)
+        and not is_exception_node(tgt)
     ]
     from graphify.bridges import derive_java_method_name_bridges
     call_records.extend(derive_java_method_name_bridges(G))
@@ -1349,11 +1359,51 @@ def _render_java_call_flow(
         owner_id = owners.get(node_id)
         return str(G.nodes[owner_id].get("label") or "") if owner_id else ""
 
-    def is_internal_detail(node_id: str) -> bool:
+    def detail_kind(node_id: str) -> str | None:
         folded = owner_label(node_id).casefold()
-        return folded.endswith((
+        if folded.endswith((
             "mapper", "util", "utils", "helper", "builder", "converter", "factory",
-        ))
+        )):
+            return "mapper/helper"
+        if folded.endswith(("config", "configuration")):
+            return "configuration"
+        return None
+
+    def is_internal_detail(node_id: str) -> bool:
+        return detail_kind(node_id) is not None
+
+    def normalise_context_term(term: str) -> str:
+        folded = term.casefold()
+        if folded.endswith("ies") and len(folded) > 4:
+            return folded[:-3] + "y"
+        if folded.endswith("s") and len(folded) > 3:
+            return folded[:-1]
+        return folded
+
+    context_stopwords = {
+        "complete", "explain", "flow", "java", "method", "remote", "repository",
+        "service", "controller", "get", "post", "put", "patch", "delete", "head",
+        "option", "rcom", "api", "the", "in", "of", "v1", "v2", "v3",
+    }
+    context_terms = {
+        normalise_context_term(token)
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", question)
+        if normalise_context_term(token) not in context_stopwords
+    }
+
+    def context_score(node_id: str) -> int:
+        label = str(G.nodes[node_id].get("label") or node_id)
+        words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", label)
+        terms = {
+            normalise_context_term(token)
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", words)
+        }
+        return len(context_terms & terms)
+
+    def callsite_line(data: dict) -> int:
+        location = str(data.get("source_location") or "")
+        match = re.search(r"(?:^|:)L?(\d+)", location)
+        return int(match.group(1)) if match else 1_000_000_000
 
     cross_reachable = {
         source
@@ -1379,11 +1429,159 @@ def _render_java_call_flow(
             if item[1].get("cross_service")
             or item[0] in cross_reachable
             else 1,
+            -context_score(item[0]),
             1 if is_internal_detail(item[0]) else 0,
             0 if item[1].get("relation") == "dispatches_to" else 1,
+            callsite_line(item[1]),
             _java_flow_symbol(G, item[0], owners),
         ))
         return candidates
+
+    def render_edge(prefix: str, src: str, tgt: str, data: dict) -> None:
+        evidence = _java_flow_edge_source(data)
+        at = f" at={evidence}" if evidence else ""
+        relation = str(data.get("relation") or "calls")
+        lines.append(
+            f"{prefix}{_java_flow_symbol(G, src, owners)} --{relation} "
+            f"[{_java_flow_edge_details(data)}]--> "
+            f"{_java_flow_symbol(G, tgt, owners)}{at}"
+        )
+
+    def terminal_reason(node_id: str) -> str:
+        folded = owner_label(node_id).casefold()
+        if folded.endswith(("repository", "gateway", "client", "connector", "adapter")):
+            return "repository/external boundary; no further Java call recorded"
+        if folded.endswith(("service", "serviceimpl")):
+            return "unresolved service leaf; no implementation or downstream call recorded"
+        return "no further production Java call recorded"
+
+    # A controller method can orchestrate several independent downstream services.
+    # Keep the common prefix once, then render every cross-service branch as a
+    # first-class E2E call instead of arbitrarily promoting the highest-confidence
+    # bridge to "primary" and demoting the other service calls.
+    orchestration_edges: list[tuple[str, str, dict]] = []
+    orchestration_nodes = [endpoint]
+    orchestration_ancestors = frozenset({endpoint})
+    orchestration_current = endpoint
+    service_starts: list[tuple[str, dict]] = []
+    for _depth in range(max_depth):
+        candidates = primary_candidates(orchestration_current, orchestration_ancestors)
+        cross_candidates = [
+            item for item in candidates
+            if item[1].get("cross_service") or item[0] in cross_reachable
+        ]
+        unique_cross: dict[str, tuple[str, dict]] = {}
+        for target, data in cross_candidates:
+            unique_cross.setdefault(target, (target, data))
+        cross_candidates = list(unique_cross.values())
+        if len(cross_candidates) > 1:
+            service_starts = sorted(
+                cross_candidates,
+                key=lambda item: (
+                    callsite_line(item[1]),
+                    _java_flow_symbol(G, item[0], owners),
+                ),
+            )
+            break
+        if len(cross_candidates) != 1:
+            break
+        target, data = cross_candidates[0]
+        orchestration_edges.append((orchestration_current, target, data))
+        orchestration_nodes.append(target)
+        orchestration_ancestors |= {target}
+        orchestration_current = target
+
+    if len(service_starts) > 1:
+        lines.append("Endpoint orchestration:")
+        for number, (src, tgt, data) in enumerate(orchestration_edges, 1):
+            render_edge(f"  {number}. ", src, tgt, data)
+        if not orchestration_edges:
+            lines.append(f"  {_java_flow_symbol(G, endpoint, owners)}")
+
+        service_paths: list[list[tuple[str, str, dict]]] = []
+        contextual_alternatives_omitted = 0
+        for first_target, first_data in service_starts:
+            path = [(orchestration_current, first_target, first_data)]
+            ancestors = orchestration_ancestors | {first_target}
+            current = first_target
+            for _depth in range(max_depth - 1):
+                candidates = primary_candidates(current, ancestors)
+                if not candidates:
+                    break
+                same_owner = [
+                    item for item in candidates
+                    if owners.get(item[0]) is not None
+                    and owners.get(item[0]) == owners.get(current)
+                    and not is_internal_detail(item[0])
+                ]
+                if len(same_owner) > 1:
+                    best_context = max(context_score(target) for target, _data in same_owner)
+                    if best_context > 0:
+                        preferred = {
+                            target
+                            for target, _data in same_owner
+                            if context_score(target) == best_context
+                        }
+                        contextual_alternatives_omitted += sum(
+                            1 for target, _data in same_owner if target not in preferred
+                        )
+                        candidates = [
+                            item for item in candidates
+                            if item not in same_owner or item[0] in preferred
+                        ]
+                target, data = candidates[0]
+                if detail_kind(target) == "configuration":
+                    break
+                path.append((current, target, data))
+                ancestors |= {target}
+                current = target
+            service_paths.append(path)
+
+        lines.append("E2E service calls:")
+        all_path_keys: set[tuple[str, str, str, str]] = set()
+        for call_number, path in enumerate(service_paths, 1):
+            target_repos = []
+            for _src, tgt, _data in path:
+                repo = str(G.nodes[tgt].get("repo") or "").strip()
+                if repo and repo not in target_repos:
+                    target_repos.append(repo)
+            repo_suffix = f" ({' -> '.join(target_repos)})" if target_repos else ""
+            lines.append(f"  Service call {call_number}{repo_suffix}:")
+            for step_number, (src, tgt, data) in enumerate(path, 1):
+                all_path_keys.add(edge_key(src, tgt, data))
+                render_edge(f"    {step_number}. ", src, tgt, data)
+            terminal = path[-1][1]
+            lines.append(
+                f"    Terminal: {_java_flow_symbol(G, terminal, owners)} "
+                f"({terminal_reason(terminal)})"
+            )
+
+        response_edges = []
+        used_keys = {
+            edge_key(src, tgt, data) for src, tgt, data in orchestration_edges
+        } | all_path_keys
+        for node_id in orchestration_nodes:
+            for target, data in outgoing.get(node_id, []):
+                if (
+                    edge_key(node_id, target, data) not in used_keys
+                    and detail_kind(target) == "mapper/helper"
+                ):
+                    response_edges.append((node_id, target, data))
+        if response_edges:
+            lines.append("Response mapping:")
+            for number, (src, tgt, data) in enumerate(response_edges, 1):
+                render_edge(f"  {number}. ", src, tgt, data)
+            lines.append("  Further mapper/helper internals collapsed.")
+        if contextual_alternatives_omitted:
+            lines.append(
+                f"Context filtering: {contextual_alternatives_omitted} non-matching "
+                "same-service method alternative(s) omitted."
+            )
+        return _cut_lines_to_budget(
+            lines,
+            token_budget,
+            "Use a larger --budget for more service-call evidence.",
+        )
 
     primary_edges: list[tuple[str, str, dict]] = []
     primary_nodes = [endpoint]
@@ -1574,6 +1772,7 @@ def _try_java_flow_query(G: nx.Graph, question: str, token_budget: int) -> str |
             endpoint,
             title="JAVA API FLOW",
             mapping=f"{display_method} {route_path}",
+            question=question,
             token_budget=token_budget,
         )
 
@@ -1606,6 +1805,7 @@ def _try_java_flow_query(G: nx.Graph, question: str, token_budget: int) -> str |
                 candidates[0],
                 title="JAVA METHOD FLOW",
                 mapping=None,
+                question=question,
                 token_budget=token_budget,
             )
         return f"JAVA METHOD FLOW NOT FOUND: {description} is not present in the graph."

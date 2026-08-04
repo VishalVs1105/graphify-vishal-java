@@ -334,6 +334,126 @@ def test_query_cli_follows_java_interface_dispatch_and_omits_noise(
     assert "ResponseEntity" not in out
 
 
+def _write_three_repo_java_flow_graph(tmp_path):
+    graph_path = _write_java_interface_flow_graph(tmp_path)
+    G = json_graph.node_link_graph(json.loads(graph_path.read_text()), edges="links")
+    callsite = "api/src/main/java/app/AddonServiceImpl.java"
+    G["impl_method"]["repository_method"].update(
+        source_file=callsite, source_location="L75",
+    )
+    G["impl_method"]["content_helper"].update(
+        source_file=callsite, source_location="L77",
+    )
+    G["impl_method"]["mapper_method"].update(
+        source_file=callsite, source_location="L79",
+    )
+
+    nodes = [
+        ("cf_controller", "ContentfulControllerV2", "rcom-contentful-ms", "api/src/main/java/content/ContentfulControllerV2.java", "L30"),
+        ("cf_controller_method", ".getContentfulResource()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulControllerV2.java", "L48"),
+        ("cf_service", "ContentfulService", "rcom-contentful-ms", "api/src/main/java/content/ContentfulService.java", "L10"),
+        ("cf_service_method", ".getContentfulEntries()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulService.java", "L14"),
+        ("cf_impl", "ContentfulServiceImpl", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L100"),
+        ("cf_impl_method", ".getContentfulEntries()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L162"),
+        ("addon_entries", ".getAddonEntries()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L182"),
+        ("device_entries", ".getDeviceEntries()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L177"),
+        ("cart_entries", ".getCartEntries()", "rcom-contentful-ms", "api/src/main/java/content/ContentfulServiceImpl.java", "L186"),
+        ("cache_repository", "CacheRepository", "rcom-contentful-ms", "api/src/main/java/content/CacheRepository.java", "L10"),
+        ("cache_has_key", ".hasKey()", "rcom-contentful-ms", "api/src/main/java/content/CacheRepository.java", "L20"),
+        ("cache_connection", ".getRedisConnection()", "rcom-contentful-ms", "api/src/main/java/content/CacheRepository.java", "L24"),
+        ("redis_repository", "RedisRepository", "rcom-contentful-ms", "api/src/main/java/content/RedisRepository.java", "L20"),
+        ("redis_has_key", ".hasKey()", "rcom-contentful-ms", "api/src/main/java/content/RedisRepository.java", "L51"),
+        ("redis_connection", ".getRedisConnection()", "rcom-contentful-ms", "api/src/main/java/content/RedisRepository.java", "L27"),
+        ("redis_execute", ".executeRedisOp()", "rcom-contentful-ms", "api/src/main/java/content/RedisRepository.java", "L54"),
+        ("redis_operation", "RedisOperation", "rcom-contentful-ms", "api/src/main/java/content/RedisOperation.java", "L8"),
+        ("redis_operation_execute", ".execute()", "rcom-contentful-ms", "api/src/main/java/content/RedisOperation.java", "L12"),
+        ("redis_config", "RedisCacheConfig", "rcom-contentful-ms", "api/src/main/java/content/RedisCacheConfig.java", "L20"),
+        ("redis_config_method", ".connectionFactory()", "rcom-contentful-ms", "api/src/main/java/content/RedisCacheConfig.java", "L60"),
+        ("not_found_exception", "ContentfulDataNotFoundException", "rcom-contentful-ms", "api/src/main/java/content/ContentfulDataNotFoundException.java", "L8"),
+    ]
+    for node_id, label, repo, source, location in nodes:
+        G.add_node(
+            node_id, label=label, repo=repo,
+            source_file=source, source_location=location,
+        )
+    for owner, method in (
+        ("cf_controller", "cf_controller_method"),
+        ("cf_service", "cf_service_method"),
+        ("cf_impl", "cf_impl_method"),
+        ("cf_impl", "addon_entries"),
+        ("cf_impl", "device_entries"),
+        ("cf_impl", "cart_entries"),
+        ("cache_repository", "cache_has_key"),
+        ("cache_repository", "cache_connection"),
+        ("redis_repository", "redis_has_key"),
+        ("redis_repository", "redis_connection"),
+        ("redis_repository", "redis_execute"),
+        ("redis_operation", "redis_operation_execute"),
+        ("redis_config", "redis_config_method"),
+    ):
+        G.add_edge(owner, method, relation="method", confidence="EXTRACTED")
+    G.add_edge(
+        "cf_impl", "cf_service", relation="implements", confidence="EXTRACTED",
+        _src="cf_impl", _tgt="cf_service",
+    )
+    G.add_edge(
+        "redis_repository", "cache_repository",
+        relation="implements", confidence="EXTRACTED",
+        _src="redis_repository", _tgt="cache_repository",
+    )
+    G.add_edge(
+        "content_repository_method", "cf_controller_method",
+        relation="calls", confidence="INFERRED", confidence_score=0.95,
+        bridge_strategy="java_http_route", cross_service=True,
+        source_file="graphify:auto-java-http-route-bridge",
+    )
+    G.add_edge("cf_controller_method", "cf_service_method", relation="calls", confidence="INFERRED")
+    G.add_edge("cf_impl_method", "addon_entries", relation="calls", confidence="EXTRACTED", source_location="L182")
+    G.add_edge("cf_impl_method", "device_entries", relation="calls", confidence="EXTRACTED", source_location="L177")
+    G.add_edge("cf_impl_method", "cart_entries", relation="calls", confidence="EXTRACTED", source_location="L186")
+    G.add_edge("cf_impl_method", "cache_connection", relation="calls", confidence="INFERRED", source_location="L169")
+    G.add_edge("cf_impl_method", "not_found_exception", relation="calls", confidence="EXTRACTED", source_location="L214")
+    G.add_edge("addon_entries", "cache_has_key", relation="calls", confidence="INFERRED")
+    G.add_edge("redis_has_key", "redis_execute", relation="calls", confidence="EXTRACTED")
+    G.add_edge("redis_execute", "redis_operation_execute", relation="calls", confidence="INFERRED")
+    G.add_edge("redis_connection", "redis_config_method", relation="calls", confidence="INFERRED")
+    graph_path.write_text(json.dumps(json_graph.node_link_data(G, edges="links")))
+    return graph_path
+
+
+def test_query_cli_renders_ordered_three_repo_service_calls_and_context_branch(
+    monkeypatch, tmp_path, capsys,
+):
+    graph_path = _write_three_repo_java_flow_graph(tmp_path)
+    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _: None)
+    monkeypatch.setattr(mainmod.sys, "argv", [
+        "graphify", "query",
+        "Explain the complete flow of GET /v1/remote/addons/details in rcom-catalog-ds",
+        "--graph", str(graph_path), "--budget", "60000",
+    ])
+
+    mainmod.main()
+    out = capsys.readouterr().out
+    assert "Endpoint orchestration:" in out
+    assert "E2E service calls:" in out
+    assert "Service call 1" in out
+    assert "Service call 2" in out
+    assert out.index("BizCatalogRepository.getProductOfferingByExternalIds()") < out.index(
+        "AddonServiceImpl.getContentfulMap()"
+    )
+    assert "[biz-catalog-service] SocController.getProductOfferingByExternalIds()" in out
+    assert "[rcom-contentful-ms] ContentfulControllerV2.getContentfulResource()" in out
+    assert "ContentfulServiceImpl.getAddonEntries() --calls" in out
+    assert "RedisRepository.hasKey() --calls" in out
+    assert "Response mapping:" in out
+    assert "AddonsMapper.mapAddons()" in out
+    assert "getDeviceEntries" not in out
+    assert "getCartEntries" not in out
+    assert "ContentfulDataNotFoundException" not in out
+    assert "RedisCacheConfig" not in out
+    assert "non-matching same-service method alternative(s) omitted" in out
+
+
 def test_query_cli_continues_deep_java_flow_to_recorded_leaf(monkeypatch, tmp_path, capsys):
     G = nx.Graph()
     methods = []

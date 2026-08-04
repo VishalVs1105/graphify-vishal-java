@@ -4,6 +4,7 @@ Full release notes with details on each version: [GitHub Releases](https://githu
 
 ## 0.9.32 (unreleased)
 
+- Fix: Java API-flow queries over three or more repositories now separate the shared endpoint orchestration from every ordered cross-service E2E call, use route context to select the relevant same-service conditional handler, and omit exception/configuration/unrelated-handler noise.
 - Fix: Java API-flow queries now render meaningful supporting service and repository branches as explicit evidence-bearing calls with their own terminal, so agents cannot overlook dependencies such as Contentful while mapper/helper internals remain collapsed.
 - Fix: incremental extraction and `_rebuild_code` no longer drop a file's other tier (#2333, #2334, #2336). Node/edge ownership was keyed on `source_file` alone, so a semantic re-extract deleted a doc's AST headings and a full rebuild deleted document AST nodes. Merge is now tier-aware (an AST re-extract replaces only AST nodes and keeps the semantic layer, and vice versa), the `_origin` provenance marker is backfilled on load so old graphs self-heal, and the full-rebuild drop is scoped to sources actually regenerated.
 - Fix: `graphify update` preserves the graph's `directed` flag instead of rebuilding it undirected (#2342, thanks @Rishet11), so God-node / path ranking keeps its direction on both the clustered and `--no-cluster` rebuild paths.
