@@ -1447,6 +1447,13 @@ def _render_java_call_flow(
             or item[0] in cross_reachable
             else 1,
             0 if is_business_boundary(item[0]) else 1,
+            0
+            if any(
+                _java_flow_source(G, next_target)
+                and detail_kind(next_target) != "configuration"
+                for next_target, _next_data in outgoing.get(item[0], [])
+            )
+            else 1,
             1 if is_internal_detail(item[0]) else 0,
             0 if item[1].get("relation") == "dispatches_to" else 1,
             callsite_line(item[1]),
@@ -1566,8 +1573,32 @@ def _render_java_call_flow(
                 target, data = candidates[0]
                 if detail_kind(target) == "configuration":
                     break
-                path.append((current, target, data))
-                ancestors |= {target}
+                repository_operations = [
+                    item for item in candidates
+                    if is_business_boundary(current)
+                    and owners.get(item[0]) == owners.get(current)
+                    and str(item[1].get("relation") or "calls") == "calls"
+                    and detail_kind(item[0]) != "configuration"
+                ]
+                if len(repository_operations) > 1 and target in {
+                    operation_target for operation_target, _operation_data
+                    in repository_operations
+                }:
+                    # Repository methods commonly make several sequential calls
+                    # (for example, build a Redis key and then execute the Redis
+                    # operation). Preserve every direct operation in Java source
+                    # order, but continue traversal through the operation that has
+                    # downstream executable evidence.
+                    repository_operations.sort(key=lambda item: (
+                        callsite_line(item[1]),
+                        _java_flow_symbol(G, item[0], owners),
+                    ))
+                    for operation_target, operation_data in repository_operations:
+                        path.append((current, operation_target, operation_data))
+                        ancestors |= {operation_target}
+                else:
+                    path.append((current, target, data))
+                    ancestors |= {target}
                 current = target
             service_paths.append(path)
 

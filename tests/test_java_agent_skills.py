@@ -64,11 +64,16 @@ def test_copilot_install_contains_java_merge_workflow(tmp_path: Path):
     assert "/graphify query <architecture question>" in body
     assert "graph.graphify_merged" in body
     assert "Do not open, search, or infer from `.java`" in body
+    assert "complete command section verbatim" in body
     refs = skill.parent / "references"
     assert sorted(path.name for path in refs.iterdir()) == [
         "github-and-merge.md",
         "query.md",
     ]
+    query_reference = (refs / "query.md").read_text(encoding="utf-8")
+    assert "Do not summarize, combine, omit" in query_reference
+    assert "renumber steps" in query_reference
+    assert "exact `Terminal:` line" in query_reference
 
 
 def test_generic_agent_alias_is_preserved():

@@ -43,6 +43,11 @@ configuration, DTO/constructor, or mapper/helper internals are omitted or
 collapsed. After handler selection, repository/gateway calls outrank local
 helpers so a response model is never presented as the business terminal. A
 repository/external terminal means the graph has no further Java call; an
-unresolved service leaf means implementation evidence is missing. Present that
-section directly. If it reports ambiguity, ask for the service/repository or use
-one of the listed exact node IDs; do not guess.
+unresolved service leaf means implementation evidence is missing. Return the
+entire `JAVA API FLOW` or `JAVA METHOD FLOW` command output verbatim in a fenced
+text block before any optional prose. Do not summarize, combine, omit, or
+renumber steps. Preserve every service call, source location, confidence marker,
+context-filtering note, and exact `Terminal:` line. Before responding, verify
+that the last numbered step and each terminal match stdout. If it reports
+ambiguity, ask for the service/repository or use one of the listed exact node
+IDs; do not guess.

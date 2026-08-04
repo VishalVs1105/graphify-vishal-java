@@ -34,6 +34,10 @@ graph-only requests:
 4. Answer only from command output. Do not open, search, or infer from `.java`
    files. If the graph lacks the answer, report insufficient graph evidence and
    recommend rebuilding or re-merging it.
+5. If command output starts with `JAVA API FLOW` or `JAVA METHOD FLOW`, reproduce
+   the complete command section verbatim in a fenced text block before any
+   optional explanation. Never omit, merge, paraphrase, or renumber its steps,
+   and never replace or invent a `Terminal:` line.
 
 ## Workflow
 

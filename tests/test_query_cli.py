@@ -364,6 +364,7 @@ def _write_three_repo_java_flow_graph(tmp_path):
         ("cache_connection", ".getRedisConnection()", "rcom-contentful-ms", "api/src/main/java/content/CacheRepository.java", "L24"),
         ("redis_repository", "RedisRepository", "rcom-contentful-ms", "api/src/main/java/content/RedisRepository.java", "L20"),
         ("redis_has_key", ".hasKey()", "rcom-contentful-ms", "api/src/main/java/content/RedisRepository.java", "L51"),
+        ("redis_final_key", ".getFinalKey()", "rcom-contentful-ms", "api/src/main/java/content/RedisRepository.java", "L53"),
         ("redis_connection", ".getRedisConnection()", "rcom-contentful-ms", "api/src/main/java/content/RedisRepository.java", "L27"),
         ("redis_execute", ".executeRedisOp()", "rcom-contentful-ms", "api/src/main/java/content/RedisRepository.java", "L54"),
         ("redis_operation", "RedisOperation", "rcom-contentful-ms", "api/src/main/java/content/RedisOperation.java", "L8"),
@@ -389,6 +390,7 @@ def _write_three_repo_java_flow_graph(tmp_path):
         ("cache_repository", "cache_has_key"),
         ("cache_repository", "cache_connection"),
         ("redis_repository", "redis_has_key"),
+        ("redis_repository", "redis_final_key"),
         ("redis_repository", "redis_connection"),
         ("redis_repository", "redis_execute"),
         ("redis_operation", "redis_operation_execute"),
@@ -419,7 +421,8 @@ def _write_three_repo_java_flow_graph(tmp_path):
     G.add_edge("addon_entries", "cache_has_key", relation="calls", confidence="INFERRED")
     G.add_edge("addon_entries", "cache_addon_keys", relation="calls", confidence="EXTRACTED")
     G.add_edge("cache_addon_keys", "content_payload", relation="calls", confidence="EXTRACTED")
-    G.add_edge("redis_has_key", "redis_execute", relation="calls", confidence="EXTRACTED")
+    G.add_edge("redis_has_key", "redis_final_key", relation="calls", confidence="EXTRACTED", source_location="L53")
+    G.add_edge("redis_has_key", "redis_execute", relation="calls", confidence="EXTRACTED", source_location="L54")
     G.add_edge("redis_execute", "redis_operation_execute", relation="calls", confidence="INFERRED")
     G.add_edge("redis_connection", "redis_config_method", relation="calls", confidence="INFERRED")
     graph_path.write_text(json.dumps(json_graph.node_link_data(G, edges="links")))
@@ -450,6 +453,10 @@ def test_query_cli_renders_ordered_three_repo_service_calls_and_context_branch(
     assert "[rcom-contentful-ms] ContentfulControllerV2.getContentfulResource()" in out
     assert "ContentfulServiceImpl.getAddonEntries() --calls" in out
     assert "RedisRepository.hasKey() --calls" in out
+    assert "RedisRepository.getFinalKey()" in out
+    assert "RedisRepository.executeRedisOp()" in out
+    assert out.index("RedisRepository.getFinalKey()") < out.index("RedisRepository.executeRedisOp()")
+    assert "Terminal: [rcom-contentful-ms] RedisOperation.execute()" in out
     assert "Response mapping:" in out
     assert "AddonsMapper.mapAddons()" in out
     assert "getDeviceEntries" not in out

@@ -91,6 +91,10 @@ prefers `getAddonEntries`), while exception, unrelated handler, configuration,
 DTO/constructor, and mapper/helper noise is omitted or collapsed. After handler
 selection, repository/gateway calls outrank local helpers so the rendered path
 ends at the recorded data or external boundary instead of a response model.
+When a repository method performs multiple operations, each direct call is
+shown in Java source order and traversal continues through the operation with
+downstream evidence. Installed agent skills require deterministic Java-flow
+stdout to be reproduced verbatim so Copilot cannot shorten or rewrite terminals.
 
 When route metadata is unavailable, Graphify also connects a unique outbound
 `*Client` type to a same-stem `*Controller` type in another repository:
