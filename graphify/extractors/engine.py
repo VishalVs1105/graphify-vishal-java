@@ -830,6 +830,313 @@ def _java_http_method_metadata(
     unique_routes = list({(item["method"], item["path"]): item for item in routes}.values())
     return {"java_http_role": role, "java_http_routes": unique_routes}
 
+
+def _java_compact_source(node, source: bytes, *, limit: int = 320) -> str:
+    """Return a bounded single-line Java source fragment for graph evidence."""
+    if node is None:
+        return ""
+    text = re.sub(r"\s+", " ", _read_text(node, source)).strip()
+    if len(text) > limit:
+        return text[: limit - 3].rstrip() + "..."
+    return text
+
+
+def _java_annotation_contract(annotation, source: bytes) -> dict[str, object]:
+    name = _java_annotation_name(annotation, source)
+    values = _java_annotation_values(annotation, source)
+    arguments = annotation.child_by_field_name("arguments") or next(
+        (child for child in annotation.children if child.type == "annotation_argument_list"),
+        None,
+    )
+    if arguments is not None:
+        for child in arguments.named_children:
+            if child.type != "element_value_pair":
+                continue
+            key_node = child.child_by_field_name("key")
+            value_node = child.child_by_field_name("value")
+            key = _read_text(key_node, source).strip() if key_node is not None else "value"
+            raw = _java_compact_source(value_node, source)
+            if key.casefold() in {"required", "defaultvalue"} and raw:
+                values.setdefault(key, [raw])
+    result: dict[str, object] = {"name": name}
+    if values:
+        result["values"] = values
+    return result
+
+
+def _java_parameter_contract(parameter, source: bytes) -> dict[str, object]:
+    """Extract a Java parameter's declared type and HTTP binding semantics."""
+    name_node = parameter.child_by_field_name("name")
+    type_node = parameter.child_by_field_name("type")
+    name = _read_text(name_node, source) if name_node is not None else ""
+    declared_type = _java_compact_source(type_node, source)
+    annotations = [
+        _java_annotation_contract(annotation, source)
+        for annotation in _java_declaration_annotations(parameter)
+    ]
+    annotation_names = {
+        str(annotation.get("name") or "").casefold() for annotation in annotations
+    }
+    binding = "argument"
+    for annotation_name, candidate in (
+        ("requestbody", "body"),
+        ("requestpart", "multipart"),
+        ("pathvariable", "path"),
+        ("requestparam", "query"),
+        ("requestheader", "header"),
+        ("cookievalue", "cookie"),
+        ("modelattribute", "model"),
+    ):
+        if annotation_name in annotation_names:
+            binding = candidate
+            break
+    contract: dict[str, object] = {
+        "name": name,
+        "type": declared_type,
+        "binding": binding,
+    }
+    if annotations:
+        contract["annotations"] = annotations
+    contract["validated"] = bool(annotation_names & {"valid", "validated"})
+    for annotation in annotations:
+        if str(annotation.get("name") or "").casefold() not in {
+            "pathvariable", "requestparam", "requestheader", "cookievalue",
+            "requestpart", "modelattribute",
+        }:
+            continue
+        values = annotation.get("values")
+        if not isinstance(values, dict):
+            continue
+        external = values.get("name") or values.get("value")
+        if isinstance(external, list) and external:
+            contract["external_name"] = external[0]
+        required = values.get("required")
+        if isinstance(required, list) and required:
+            contract["required"] = str(required[0]).casefold() != "false"
+        default = values.get("defaultvalue")
+        if isinstance(default, list) and default:
+            contract["default"] = default[0]
+    return contract
+
+
+def _java_contains(outer, inner) -> bool:
+    return bool(
+        outer is not None
+        and inner is not None
+        and outer.start_byte <= inner.start_byte
+        and inner.end_byte <= outer.end_byte
+    )
+
+
+def _java_condition_expression(node, source: bytes) -> str:
+    condition = (
+        node.child_by_field_name("condition")
+        or node.child_by_field_name("expression")
+    )
+    text = _java_compact_source(condition, source)
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
+    return text
+
+
+def _java_call_conditions(call_node, source: bytes) -> list[dict[str, object]]:
+    """Return the control-flow predicates that guard one Java invocation.
+
+    The evidence is syntactic: it records the branch containing the call and
+    never claims that the predicate was true at runtime.
+    """
+    conditions: list[dict[str, object]] = []
+    current = call_node.parent
+    while current is not None and current.type not in {
+        "method_declaration", "constructor_declaration",
+    }:
+        kind = current.type
+        line = f"L{current.start_point[0] + 1}"
+        if kind == "if_statement":
+            expression = _java_condition_expression(current, source)
+            consequence = current.child_by_field_name("consequence")
+            alternative = current.child_by_field_name("alternative")
+            if expression and _java_contains(consequence, call_node):
+                conditions.append({
+                    "kind": "if", "branch": "then",
+                    "expression": expression, "line": line,
+                })
+            elif expression and _java_contains(alternative, call_node):
+                conditions.append({
+                    "kind": "if", "branch": "else",
+                    "expression": expression, "line": line,
+                })
+        elif kind in {"while_statement", "do_statement"}:
+            expression = _java_condition_expression(current, source)
+            if expression:
+                conditions.append({
+                    "kind": "loop", "branch": "while",
+                    "expression": expression, "line": line,
+                })
+        elif kind == "for_statement":
+            expression = _java_compact_source(
+                current.child_by_field_name("condition"), source
+            )
+            if expression:
+                conditions.append({
+                    "kind": "loop", "branch": "for",
+                    "expression": expression, "line": line,
+                })
+        elif kind == "enhanced_for_statement":
+            name = _java_compact_source(current.child_by_field_name("name"), source)
+            value = _java_compact_source(current.child_by_field_name("value"), source)
+            expression = f"{name} in {value}" if name and value else _java_compact_source(current, source)
+            conditions.append({
+                "kind": "loop", "branch": "for_each",
+                "expression": expression, "line": line,
+            })
+        elif kind == "ternary_expression":
+            expression = _java_condition_expression(current, source)
+            consequence = current.child_by_field_name("consequence")
+            alternative = current.child_by_field_name("alternative")
+            branch = "then" if _java_contains(consequence, call_node) else "else"
+            if expression:
+                conditions.append({
+                    "kind": "ternary", "branch": branch,
+                    "expression": expression, "line": line,
+                })
+        elif kind in {"switch_rule", "switch_block_statement_group"}:
+            label_node = next(
+                (child for child in current.named_children if child.type == "switch_label"),
+                None,
+            )
+            label = _java_compact_source(label_node, source)
+            switch_node = current.parent
+            while switch_node is not None and switch_node.type != "switch_expression":
+                switch_node = switch_node.parent
+            selector = _java_condition_expression(switch_node, source) if switch_node is not None else ""
+            if label.casefold() == "default":
+                expression = f"no explicit {selector or 'switch'} case matches"
+                branch = "else"
+            else:
+                case_value = re.sub(r"^case\s+", "", label, flags=re.IGNORECASE)
+                expression = f"{selector} is {case_value}" if selector else label
+                branch = "case"
+            conditions.append({
+                "kind": "switch", "branch": branch,
+                "expression": expression, "line": line,
+            })
+        elif kind == "catch_clause":
+            parameter = current.child_by_field_name("parameter")
+            conditions.append({
+                "kind": "catch", "branch": "exception",
+                "expression": _java_compact_source(parameter, source) or "exception",
+                "line": line,
+            })
+        current = current.parent
+    conditions.reverse()
+    return conditions[:20]
+
+
+def _java_method_logic(method_node, source: bytes) -> tuple[list[dict], list[dict]]:
+    """Extract method decisions and observable return/throw outcomes."""
+    decisions: list[dict] = []
+    outcomes: list[dict] = []
+
+    def visit(node) -> None:
+        if node is not method_node and node.type in {
+            "method_declaration", "constructor_declaration", "class_declaration",
+            "interface_declaration", "record_declaration", "enum_declaration",
+        }:
+            return
+        line = f"L{node.start_point[0] + 1}"
+        if node.type == "if_statement":
+            expression = _java_condition_expression(node, source)
+            if expression:
+                decisions.append({"kind": "if", "expression": expression, "line": line})
+                if node.child_by_field_name("alternative") is not None:
+                    decisions.append({
+                        "kind": "else", "expression": expression, "line": line,
+                    })
+        elif node.type in {"while_statement", "do_statement", "for_statement"}:
+            expression = _java_condition_expression(node, source)
+            if expression:
+                decisions.append({"kind": "loop", "expression": expression, "line": line})
+        elif node.type == "enhanced_for_statement":
+            name = _java_compact_source(node.child_by_field_name("name"), source)
+            value = _java_compact_source(node.child_by_field_name("value"), source)
+            decisions.append({
+                "kind": "for_each",
+                "expression": f"{name} in {value}" if name and value else _java_compact_source(node, source),
+                "line": line,
+            })
+        elif node.type == "ternary_expression":
+            expression = _java_condition_expression(node, source)
+            if expression:
+                decisions.append({"kind": "ternary", "expression": expression, "line": line})
+        elif node.type == "switch_expression":
+            expression = _java_condition_expression(node, source)
+            if expression:
+                decisions.append({"kind": "switch", "expression": expression, "line": line})
+        elif node.type == "switch_label":
+            decisions.append({
+                "kind": "case", "expression": _java_compact_source(node, source), "line": line,
+            })
+        elif node.type == "catch_clause":
+            parameter = node.child_by_field_name("parameter")
+            decisions.append({
+                "kind": "catch",
+                "expression": _java_compact_source(parameter, source) or "exception",
+                "line": line,
+            })
+        elif node.type == "return_statement":
+            value = next((child for child in node.named_children), None)
+            outcomes.append({
+                "kind": "return", "expression": _java_compact_source(value, source),
+                "line": line, "conditions": _java_call_conditions(node, source),
+            })
+        elif node.type == "throw_statement":
+            value = next((child for child in node.named_children), None)
+            outcomes.append({
+                "kind": "throw", "expression": _java_compact_source(value, source),
+                "line": line, "conditions": _java_call_conditions(node, source),
+            })
+        for child in node.children:
+            visit(child)
+
+    visit(method_node)
+    return decisions[:50], outcomes[:50]
+
+
+def _java_method_contract_metadata(method_node, source: bytes) -> dict[str, object]:
+    """Extract request/response types and business-decision evidence for a method."""
+    metadata: dict[str, object] = {}
+    parameters_node = method_node.child_by_field_name("parameters")
+    parameters: list[dict[str, object]] = []
+    if parameters_node is not None:
+        for parameter in parameters_node.named_children:
+            if parameter.type in {"formal_parameter", "spread_parameter"}:
+                parameters.append(_java_parameter_contract(parameter, source))
+    metadata["java_parameters"] = parameters
+    metadata["java_parameter_count"] = len(parameters)
+    method_name_node = method_node.child_by_field_name("name")
+    method_name = _read_text(method_name_node, source) if method_name_node is not None else "constructor"
+    metadata["java_signature"] = (
+        f"{method_name}("
+        + ", ".join(str(parameter.get("type") or "?") for parameter in parameters)
+        + ")"
+    )
+    return_node = method_node.child_by_field_name("type")
+    if return_node is not None:
+        metadata["java_return_type"] = _java_compact_source(return_node, source)
+        refs: list[tuple[str, str]] = []
+        _java_collect_type_refs(return_node, source, False, refs)
+        metadata["java_response_types"] = list(dict.fromkeys(name for name, _role in refs))
+    else:
+        metadata["java_return_type"] = "constructor"
+        metadata["java_response_types"] = []
+    decisions, outcomes = _java_method_logic(method_node, source)
+    if decisions:
+        metadata["java_decisions"] = decisions
+    if outcomes:
+        metadata["java_outcomes"] = outcomes
+    return metadata
+
 def _php_name_text(node, source: bytes) -> str | None:
     """Return the unqualified name text from a PHP `name`/`qualified_name` node."""
     if node is None:
@@ -3676,15 +3983,23 @@ def _extract_generic(
             line = node.start_point[0] + 1
             func_metadata = None
             if config.ts_module == "tree_sitter_java" and parent_class_nid:
-                java_method_metadata = _java_http_method_metadata(
+                java_method_metadata = _java_method_contract_metadata(node, source)
+                java_http_metadata = _java_http_method_metadata(
                     node,
                     source,
                     java_http_classes.get(parent_class_nid),
                 )
-                if java_method_metadata:
-                    func_metadata = java_method_metadata
+                if java_http_metadata:
+                    java_method_metadata.update(java_http_metadata)
+                func_metadata = java_method_metadata
             if parent_class_nid:
-                func_nid = _make_id(parent_class_nid, func_name)
+                if config.ts_module == "tree_sitter_java" and func_metadata:
+                    # Signature-qualified IDs preserve Java overloads as separate
+                    # method nodes while retaining the familiar display label.
+                    func_identity = str(func_metadata.get("java_signature") or func_name)
+                    func_nid = _make_id(parent_class_nid, func_identity)
+                else:
+                    func_nid = _make_id(parent_class_nid, func_name)
                 add_node(func_nid, f".{func_name}()", line, metadata=func_metadata)
                 add_edge(parent_class_nid, func_nid, "method", line)
             else:
@@ -4249,6 +4564,28 @@ def _extract_generic(
         label_to_nid[normalised] = n["id"]
         label_to_nid_ci[normalised.lower()] = n["id"]
 
+    java_method_owner: dict[str, str] = {}
+    java_local_methods: dict[tuple[str, str, int | None], list[str]] = {}
+    if config.ts_module == "tree_sitter_java":
+        node_by_id = {str(node["id"]): node for node in nodes if node.get("id")}
+        for edge in edges:
+            if edge.get("relation") != "method":
+                continue
+            owner = str(edge.get("source") or "")
+            method = str(edge.get("target") or "")
+            method_data = node_by_id.get(method, {})
+            label = str(method_data.get("label") or "").lstrip(".").removesuffix("()")
+            metadata = method_data.get("metadata")
+            arity = (
+                metadata.get("java_parameter_count")
+                if isinstance(metadata, dict)
+                and isinstance(metadata.get("java_parameter_count"), int)
+                else None
+            )
+            if owner and method and label:
+                java_method_owner[method] = owner
+                java_local_methods.setdefault((owner, label, arity), []).append(method)
+
     seen_call_pairs: set[tuple[str, str]] = set()
     seen_indirect_pairs: set[tuple[str, str]] = set()  # Python indirect_call dedup
     seen_dyn_import_pairs: set[tuple[str, str]] = set()
@@ -4468,6 +4805,17 @@ def _extract_generic(
             is_this_field_call: bool = False
             swift_receiver: str | None = None
             member_receiver: str | None = None
+            java_conditions = (
+                _java_call_conditions(node, source)
+                if config.ts_module == "tree_sitter_java"
+                else []
+            )
+            java_arguments = node.child_by_field_name("arguments")
+            java_argument_count = (
+                len(java_arguments.named_children)
+                if config.ts_module == "tree_sitter_java" and java_arguments is not None
+                else None
+            )
 
             # Special handling per language
             if config.ts_module == "tree_sitter_swift":
@@ -4651,6 +4999,13 @@ def _extract_generic(
                             if owner is not None and owner.type == "this" and field is not None:
                                 member_receiver = f"this.{_read_text(field, source)}"
                                 is_this_field_call = True
+                    else:
+                        # An unqualified Java invocation resolves against the
+                        # enclosing type (`helper(x)` is effectively
+                        # `this.helper(x)`). Deferring it to the typed resolver
+                        # also lets argument arity disambiguate overloads.
+                        is_member_call = True
+                        member_receiver = "this"
             elif config.ts_module == "tree_sitter_ruby":
                 # Ruby's `call` node carries `receiver` and `method` as direct
                 # fields (no intermediate accessor node), so the generic accessor
@@ -4723,7 +5078,20 @@ def _extract_generic(
                 _java_defer = (
                     config.ts_module == "tree_sitter_java" and is_member_call
                 )
-                if _java_defer or (
+                java_local_target = None
+                if (
+                    config.ts_module == "tree_sitter_java"
+                    and member_receiver == "this"
+                ):
+                    owner = java_method_owner.get(caller_nid)
+                    candidates = java_local_methods.get(
+                        (owner or "", callee_name, java_argument_count), []
+                    )
+                    if len(candidates) == 1:
+                        java_local_target = candidates[0]
+                if java_local_target is not None:
+                    tgt_nid = java_local_target
+                elif _java_defer or (
                     is_member_call
                     and member_receiver
                     and (
@@ -4737,7 +5105,11 @@ def _extract_generic(
                     tgt_nid = label_to_nid.get(callee_name)
                 if tgt_nid and tgt_nid != caller_nid:
                     pair = (caller_nid, tgt_nid)
-                    if pair not in seen_call_pairs:
+                    # Java preserves every syntactic call occurrence. The
+                    # corpus-level Java aggregator folds repeated caller/target
+                    # pairs into one graph edge with all call sites and branch
+                    # conditions, avoiding loss in a simple NetworkX Graph.
+                    if pair not in seen_call_pairs or config.ts_module == "tree_sitter_java":
                         seen_call_pairs.add(pair)
                         line = node.start_point[0] + 1
                         edges.append({
@@ -4749,6 +5121,11 @@ def _extract_generic(
                             "source_file": str_path,
                             "source_location": f"L{line}",
                             "weight": 1.0,
+                            **({"conditions": java_conditions} if java_conditions else {}),
+                            **(
+                                {"argument_count": java_argument_count}
+                                if java_argument_count is not None else {}
+                            ),
                         })
                 elif callee_name and not tgt_nid:
                     # Callee not in this file — save for cross-file resolution in extract()
@@ -4760,6 +5137,10 @@ def _extract_generic(
                         "source_location": f"L{node.start_point[0] + 1}",
                         "receiver": swift_receiver or member_receiver,
                     }
+                    if java_conditions:
+                        rc_entry["conditions"] = java_conditions
+                    if java_argument_count is not None:
+                        rc_entry["argument_count"] = java_argument_count
                     # Ruby: attach the receiver's inferred type from the method's
                     # local `var = Const.new` bindings, when unambiguously known.
                     if member_receiver and config.ts_module == "tree_sitter_ruby":

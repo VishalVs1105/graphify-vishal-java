@@ -17,6 +17,7 @@ from graphify.extractors.resolution import (
     _resolve_cross_file_java_imports,
     _resolve_java_type_references,
 )
+from graphify.security import sanitize_metadata
 
 
 def _import_java(
@@ -238,7 +239,6 @@ def _resolve_java_member_calls(
         enclosing_type.setdefault(method, owner)
         method_index.setdefault((owner, key(method_node.get("label"))), set()).add(method)
 
-    existing = {(edge.get("source"), edge.get("target")) for edge in all_edges}
     for result in per_file:
         for raw_call in result.get("raw_calls", []):
             if raw_call.get("lang") != "java" or not raw_call.get("is_member_call"):
@@ -264,13 +264,23 @@ def _resolve_java_member_calls(
                     continue
                 type_id = candidates[0]
             methods = method_index.get((type_id, key(callee)), set())
+            argument_count = raw_call.get("argument_count")
+            if argument_count is not None and len(methods) > 1:
+                arity_matches = {
+                    method_id
+                    for method_id in methods
+                    if isinstance(node_by_id.get(method_id, {}).get("metadata"), dict)
+                    and node_by_id[method_id]["metadata"].get("java_parameter_count")
+                    == argument_count
+                }
+                if arity_matches:
+                    methods = arity_matches
             if len(methods) != 1:
                 continue
             target = next(iter(methods))
-            if target == caller or (caller, target) in existing:
+            if target == caller:
                 continue
-            existing.add((caller, target))
-            all_edges.append({
+            edge = {
                 "source": caller,
                 "target": target,
                 "relation": "calls",
@@ -280,7 +290,13 @@ def _resolve_java_member_calls(
                 "source_file": raw_call.get("source_file", ""),
                 "source_location": raw_call.get("source_location"),
                 "weight": 1.0,
-            })
+            }
+            if raw_call.get("conditions"):
+                edge["conditions"] = raw_call["conditions"]
+            if raw_call.get("argument_count") is not None:
+                edge["argument_count"] = raw_call["argument_count"]
+            all_edges.append(edge)
+            raw_call["_resolved"] = True
 
 
 def _resolve_java_direct_calls(
@@ -294,7 +310,6 @@ def _resolve_java_direct_calls(
         label = str(node.get("label", "")).strip()
         if node.get("source_file") and label and _is_type_like_definition(node):
             type_ids.setdefault(label, []).append(str(node["id"]))
-    existing = {(edge.get("source"), edge.get("target")) for edge in all_edges}
     for result in per_file:
         for raw_call in result.get("raw_calls", []):
             if raw_call.get("lang") != "java" or raw_call.get("is_member_call"):
@@ -305,10 +320,9 @@ def _resolve_java_direct_calls(
             if not caller or len(candidates) != 1:
                 continue
             target = candidates[0]
-            if target == caller or (caller, target) in existing:
+            if target == caller:
                 continue
-            existing.add((caller, target))
-            all_edges.append({
+            edge = {
                 "source": caller,
                 "target": target,
                 "relation": "calls",
@@ -318,7 +332,109 @@ def _resolve_java_direct_calls(
                 "source_file": raw_call.get("source_file", ""),
                 "source_location": raw_call.get("source_location"),
                 "weight": 1.0,
-            })
+            }
+            if raw_call.get("conditions"):
+                edge["conditions"] = raw_call["conditions"]
+            if raw_call.get("argument_count") is not None:
+                edge["argument_count"] = raw_call["argument_count"]
+            all_edges.append(edge)
+            raw_call["_resolved"] = True
+
+
+def _attach_java_unresolved_calls(nodes: list[dict], raw_calls: list[dict]) -> None:
+    """Retain observed-but-unbound Java invocations on their caller method."""
+    node_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
+    unresolved_by_caller: dict[str, list[dict]] = {}
+    for raw_call in raw_calls:
+        if raw_call.get("lang") != "java" or raw_call.get("_resolved"):
+            continue
+        caller = str(raw_call.get("caller_nid") or "")
+        callee = str(raw_call.get("callee") or "")
+        if not caller or not callee or caller not in node_by_id:
+            continue
+        item: dict[str, object] = {
+            "callee": callee,
+            "receiver": raw_call.get("receiver") or "",
+            "receiver_type": raw_call.get("receiver_type") or "",
+            "source_file": raw_call.get("source_file") or "",
+            "source_location": raw_call.get("source_location"),
+        }
+        if raw_call.get("argument_count") is not None:
+            item["argument_count"] = raw_call["argument_count"]
+        if raw_call.get("conditions"):
+            item["conditions"] = raw_call["conditions"]
+        values = unresolved_by_caller.setdefault(caller, [])
+        if item not in values:
+            values.append(item)
+    for caller, unresolved in unresolved_by_caller.items():
+        node = node_by_id[caller]
+        metadata = dict(node.get("metadata") or {})
+        sanitized = sanitize_metadata({"java_unresolved_calls": unresolved})
+        metadata["java_unresolved_calls"] = sanitized["java_unresolved_calls"]
+        node["metadata"] = metadata
+
+
+def _aggregate_java_call_edges(edges: list[dict]) -> list[dict]:
+    """Preserve every Java call occurrence in a simple-graph edge.
+
+    NetworkX ``Graph`` stores one edge per node pair. Repeated invocations of
+    the same target (especially in different branches) would otherwise be
+    overwritten. This folds them into a stable edge and retains every call site
+    plus every distinct guarding condition.
+    """
+    grouped: dict[tuple[object, object, object], dict] = {}
+    output: list[dict] = []
+
+    def occurrence(edge: dict) -> dict:
+        item: dict[str, object] = {
+            "source_file": edge.get("source_file", ""),
+            "source_location": edge.get("source_location"),
+        }
+        if edge.get("conditions"):
+            item["conditions"] = [dict(value) for value in edge["conditions"]]
+        if edge.get("argument_count") is not None:
+            item["argument_count"] = edge["argument_count"]
+        return item
+
+    for edge in edges:
+        if edge.get("relation") != "calls":
+            output.append(edge)
+            continue
+        key = (edge.get("source"), edge.get("target"), edge.get("relation"))
+        current = grouped.get(key)
+        if current is None:
+            current = dict(edge)
+            if edge.get("conditions"):
+                current["conditions"] = [dict(value) for value in edge["conditions"]]
+            current["call_sites"] = [occurrence(edge)]
+            current["occurrence_count"] = 1
+            grouped[key] = current
+            output.append(current)
+            continue
+        site = occurrence(edge)
+        if site not in current["call_sites"]:
+            current["call_sites"].append(site)
+            current["occurrence_count"] = int(current.get("occurrence_count") or 1) + 1
+        conditions = current.setdefault("conditions", [])
+        for condition in edge.get("conditions") or []:
+            if condition not in conditions:
+                conditions.append(condition)
+        if current.get("confidence") != "EXTRACTED" and edge.get("confidence") == "EXTRACTED":
+            current["confidence"] = "EXTRACTED"
+            current["confidence_score"] = edge.get("confidence_score", 1.0)
+    for edge in output:
+        if edge.get("relation") != "calls":
+            continue
+        bounded = sanitize_metadata({
+            "conditions": edge.get("conditions") or [],
+            "call_sites": edge.get("call_sites") or [],
+        })
+        if bounded["conditions"]:
+            edge["conditions"] = bounded["conditions"]
+        else:
+            edge.pop("conditions", None)
+        edge["call_sites"] = bounded["call_sites"]
+    return output
 
 
 def _deduplicate(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -371,6 +487,8 @@ def extract(
     _resolve_java_type_references(per_file, java_paths, all_nodes, all_edges)
     _resolve_java_member_calls(per_file, all_nodes, all_edges)
     _resolve_java_direct_calls(per_file, all_nodes, all_edges)
+    _attach_java_unresolved_calls(all_nodes, raw_calls)
+    all_edges = _aggregate_java_call_edges(all_edges)
     all_nodes, all_edges = _deduplicate(all_nodes, all_edges)
 
     for node in all_nodes:

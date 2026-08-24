@@ -6,6 +6,8 @@ are present, select the one whose JSON metadata has
 
 ```bash
 graphify query "How does checkout call payment?" --budget 60000 --graph "<absolute-merged-graph.json>"
+graphify query "Explain POST /payments/charge" --audience developer --budget 60000 --graph "<absolute-merged-graph.json>"
+graphify query "Explain POST /payments/charge for a BSA" --audience bsa --budget 60000 --graph "<absolute-merged-graph.json>"
 graphify path "CheckoutController" "StripeGateway" --graph "<absolute-merged-graph.json>"
 graphify explain "PaymentClient" --graph "<absolute-merged-graph.json>"
 ```
@@ -22,6 +24,16 @@ For a Java API flow, include the HTTP verb, complete route, and service name:
 ```text
 /graphify query Explain the complete flow of POST /payments/charge in payment-service
 ```
+
+Choose one audience:
+
+- Developer: pass `--audience developer`. Preserve the endpoint contract,
+  request/response DTO types, every reachable production call occurrence,
+  guarding conditions, method contracts, decisions, returns, and throws.
+- BSA/business analyst: pass `--audience bsa`. The CLI returns
+  `BUSINESS API FLOW`; explain request meaning, business steps, rules,
+  cross-service interactions, and outcomes. Do not introduce Java class/method
+  chains or DTO names/types into the business answer.
 
 For a method flow, include `Class.method` and the service name:
 
@@ -55,6 +67,19 @@ responding, compare the explanation against stdout and verify that each numbered
 edge and every terminal is represented. Do not add behavior not present in
 graph evidence. If stdout reports ambiguity, ask for the service/repository or
 use one of the listed exact node IDs; do not guess.
+
+For developer output, the `Complete reachable production call inventory`
+contains all call edges reachable from the selected endpoint within the static
+graph, including repeated call-site counts and branch predicates. The curated
+E2E paths remain the architectural view; the inventory is the completeness
+view. Preserve both. Contract/condition sections require graphs rebuilt with a
+version that extracts `java_parameters`, `java_return_type`, `java_decisions`,
+`java_outcomes`, call sites, and conditions.
+
+For `BUSINESS API FLOW`, use the CLI's business wording as the evidence source.
+Do not add DTO types or reconstruct a Java chain. Preserve all numbered
+business steps, rules, service interactions, successful outcomes, alternative
+outcomes, and evidence boundaries.
 
 Use this response shape (omit the raw stdout block unless the user explicitly
 asks for it):

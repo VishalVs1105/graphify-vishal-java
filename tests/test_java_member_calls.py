@@ -216,11 +216,17 @@ def test_overloaded_callers_keep_body_scoped_receiver_types(tmp_path: Path):
         ),
     })
 
-    run = _find(result, ".run()", "checkout")
+    runs = {
+        node["metadata"]["java_parameters"][0]["type"]: node["id"]
+        for node in result["nodes"]
+        if node.get("label") == ".run()" and "checkout" in node["id"]
+    }
     gateway_charge = _find(result, ".charge()", "paymentgateway")
     audit_charge = _find(result, ".charge()", "auditlog")
-    assert (run, gateway_charge) in calls
-    assert (run, audit_charge) in calls
+    assert (runs["int"], gateway_charge) in calls
+    assert (runs["int"], audit_charge) not in calls
+    assert (runs["String"], audit_charge) in calls
+    assert (runs["String"], gateway_charge) not in calls
 
 
 def test_ambiguous_receiver_type_emits_no_edge(tmp_path: Path):

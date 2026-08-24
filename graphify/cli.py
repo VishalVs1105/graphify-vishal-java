@@ -851,7 +851,7 @@ def dispatch_command(cmd: str) -> None:
             sys.exit(1)
     elif cmd == "query":
         if len(sys.argv) < 3:
-            print("Usage: graphify query \"<question>\" [--dfs] [--context C] [--budget N] [--graph path]", file=sys.stderr)
+            print("Usage: graphify query \"<question>\" [--audience developer|bsa] [--dfs] [--context C] [--budget N] [--graph path]", file=sys.stderr)
             sys.exit(1)
         from graphify.serve import _query_graph_text
         from graphify.security import sanitize_label
@@ -862,6 +862,7 @@ def dispatch_command(cmd: str) -> None:
         use_dfs = "--dfs" in sys.argv
         budget = 2000
         graph_path = _default_graph_path()
+        audience: str | None = None
         context_filters: list[str] = []
         args = sys.argv[3:]
         i = 0
@@ -889,8 +890,17 @@ def dispatch_command(cmd: str) -> None:
             elif args[i] == "--graph" and i + 1 < len(args):
                 graph_path = args[i + 1]
                 i += 2
+            elif args[i] == "--audience" and i + 1 < len(args):
+                audience = args[i + 1].strip().casefold()
+                i += 2
+            elif args[i].startswith("--audience="):
+                audience = args[i].split("=", 1)[1].strip().casefold()
+                i += 1
             else:
                 i += 1
+        if audience not in {None, "developer", "bsa"}:
+            print("error: --audience must be developer or bsa", file=sys.stderr)
+            sys.exit(1)
         gp = Path(graph_path).resolve()
         if not gp.exists():
             print(f"error: graph file not found: {gp}", file=sys.stderr)
@@ -956,6 +966,7 @@ def dispatch_command(cmd: str) -> None:
             depth=2,
             token_budget=budget,
             context_filters=context_filters,
+            audience=audience,
         )
         querylog.log_query(
             kind="query",
