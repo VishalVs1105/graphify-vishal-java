@@ -247,31 +247,49 @@ def derive_java_method_name_bridges(G: nx.Graph) -> list[tuple[str, str, dict]]:
         if source in bridged_sources:
             continue
         candidates = {
-            target
+            target: target_parameter_count
             for target, target_repo, target_parameter_count in inbound_by_name.get(name, [])
             if target_repo != source_repo
-            and (
-                source_parameter_count is None
-                or target_parameter_count is None
-                or source_parameter_count == target_parameter_count
-            )
         }
-        if len(candidates) != 1:
+        # Enterprise HTTP clients frequently expose internal authentication,
+        # channel and routing arguments that are not controller parameters.
+        # Exact arity is therefore useful for disambiguation, but a mismatch
+        # must not reject the only exact method-name match in another service.
+        exact_arity = {
+            target: target_parameter_count
+            for target, target_parameter_count in candidates.items()
+            if source_parameter_count is not None
+            and target_parameter_count is not None
+            and source_parameter_count == target_parameter_count
+        }
+        if len(exact_arity) == 1:
+            selected = exact_arity
+        elif len(candidates) == 1:
+            selected = candidates
+        else:
             continue
-        target = next(iter(candidates))
+        target, target_parameter_count = next(iter(selected.items()))
+        parameter_count_mismatch = (
+            source_parameter_count is not None
+            and target_parameter_count is not None
+            and source_parameter_count != target_parameter_count
+        )
         derived.append((
             source,
             target,
             {
                 "relation": "calls",
                 "confidence": "INFERRED",
-                "confidence_score": 0.85,
+                "confidence_score": 0.8 if parameter_count_mismatch else 0.85,
                 "source_file": "graphify:auto-java-method-name-bridge",
                 "source_location": None,
                 "weight": 1.0,
                 "cross_service": True,
                 "bridge_strategy": "java_repository_controller_method_name",
                 "method_name": name,
+                "source_parameter_count": source_parameter_count,
+                "target_parameter_count": target_parameter_count,
+                "parameter_count_mismatch": parameter_count_mismatch,
                 "_src": source,
                 "_tgt": target,
             },

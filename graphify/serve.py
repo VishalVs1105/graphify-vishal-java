@@ -1585,13 +1585,100 @@ def _java_reachable_calls(
     endpoint: str,
     outgoing: dict[str, list[tuple[str, dict]]],
     *,
+    question: str = "",
     max_depth: int = 64,
 ) -> tuple[
     list[tuple[int, str, str, dict]],
     list[str],
     dict[str, list[dict[str, str]]],
 ]:
-    """Return feasible reachable calls while propagating constant arguments."""
+    """Return feasible reachable calls while propagating constants and API context."""
+    records = list(_true_edge_records(G))
+    owners = _java_method_owners(G, records)
+
+    def normalise_context_term(term: str) -> str:
+        folded = term.casefold()
+        if folded.endswith("ies") and len(folded) > 4:
+            return folded[:-3] + "y"
+        if folded.endswith("s") and len(folded) > 3:
+            return folded[:-1]
+        return folded
+
+    context_stopwords = {
+        "complete", "developer", "explain", "flow", "java", "method", "remote",
+        "repository", "service", "controller", "business", "bsa", "analyst",
+        "get", "post", "put", "patch", "delete", "head", "option", "rcom",
+        "api", "the", "in", "of", "for", "a", "v1", "v2", "v3",
+    }
+    context_terms = {
+        normalise_context_term(token)
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", question)
+        if normalise_context_term(token) not in context_stopwords
+    }
+
+    def context_score(node_id: str) -> int:
+        label = str(G.nodes[node_id].get("label") or node_id)
+        words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", label)
+        terms = {
+            normalise_context_term(token)
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", words)
+        }
+        return len(context_terms & terms)
+
+    def filter_contextual_alternatives(
+        source: str,
+        values: list[tuple[str, dict]],
+    ) -> list[tuple[str, dict]]:
+        """Prune only obvious strategy families such as getAddon/DeviceEntries.
+
+        Three or more methods on the same implementation with a shared semantic
+        suffix are alternatives, not sequential calls.  A question-specific
+        match is safe to prefer; without a match every alternative is retained.
+        """
+        same_owner = [
+            item for item in values
+            if owners.get(item[0]) is not None
+            and owners.get(item[0]) == owners.get(source)
+        ]
+        families: dict[str, list[tuple[str, dict]]] = {}
+        for item in same_owner:
+            label = str(G.nodes[item[0]].get("label") or "")
+            words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", label)
+            tokens = re.findall(r"[A-Za-z][A-Za-z0-9]*", words)
+            if tokens:
+                families.setdefault(normalise_context_term(tokens[-1]), []).append(item)
+        retained = list(values)
+        for family in families.values():
+            if len(family) < 3:
+                continue
+            best_context = max(context_score(target) for target, _data in family)
+            if best_context <= 0:
+                continue
+            preferred = {
+                target
+                for target, _data in family
+                if context_score(target) == best_context
+            }
+            omitted_count = sum(
+                1 for target, _data in family if target not in preferred
+            )
+            next_retained: list[tuple[str, dict]] = []
+            for item in retained:
+                target, data = item
+                if item not in family:
+                    next_retained.append(item)
+                elif target in preferred:
+                    next_retained.append((
+                        target,
+                        {
+                            **data,
+                            "_java_context_preferred": True,
+                            "_java_context_alternatives_omitted": omitted_count,
+                        },
+                    ))
+            retained = next_retained
+        return retained
+
     queue: list[tuple[str, int, dict[str, str]]] = [(endpoint, 0, {})]
     expanded: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
     nodes: list[str] = [endpoint]
@@ -1612,6 +1699,7 @@ def _java_reachable_calls(
                 str(item[0]),
             ),
         )
+        values = filter_contextual_alternatives(source, values)
         matched_switch_case = any(
             _java_condition_truth(condition, bindings) is True
             for _target, edge_data in values
@@ -1658,10 +1746,12 @@ def _append_java_developer_evidence(
     endpoint: str,
     outgoing: dict[str, list[tuple[str, dict]]],
     owners: dict[str, str],
+    *,
+    question: str,
 ) -> None:
     """Append exhaustive AST evidence beyond the curated primary-path view."""
     reachable_edges, reachable_nodes, bindings_by_node = _java_reachable_calls(
-        G, endpoint, outgoing
+        G, endpoint, outgoing, question=question
     )
     has_enriched_metadata = any(
         "java_parameters" in _java_metadata(G, node_id)
@@ -1943,7 +2033,7 @@ def _render_java_business_flow(
     for source, target, data in call_records:
         outgoing.setdefault(source, []).append((target, data))
     reachable_edges, reachable_nodes, bindings_by_node = _java_reachable_calls(
-        G, endpoint, outgoing
+        G, endpoint, outgoing, question=question
     )
 
     lines = ["BUSINESS API FLOW"]
@@ -2129,6 +2219,38 @@ def _render_java_business_flow(
     else:
         lines.append("  No cross-service interaction is recorded for this API.")
 
+    downstream_repos: list[str] = []
+    for _depth, source, target, data in reachable_edges:
+        if not data.get("cross_service"):
+            continue
+        source_repo = str(G.nodes[source].get("repo") or endpoint_repo)
+        target_repo = str(G.nodes[target].get("repo") or "")
+        if (
+            target_repo
+            and target_repo != source_repo
+            and target_repo not in downstream_repos
+        ):
+            downstream_repos.append(target_repo)
+    lines.append("Downstream service behavior:")
+    if not downstream_repos:
+        lines.append("  No downstream service behavior is recorded for this API.")
+    for repo in downstream_repos:
+        lines.append(f"  {repo}:")
+        actions: list[str] = []
+        for _depth, source, target, _data in reachable_edges:
+            source_repo = str(G.nodes[source].get("repo") or endpoint_repo)
+            target_repo = str(G.nodes[target].get("repo") or source_repo)
+            if target_repo != repo:
+                continue
+            action = _java_business_action(G, target)
+            if action not in actions:
+                actions.append(action)
+        if actions:
+            for number, action in enumerate(actions, 1):
+                lines.append(f"    {number}. {action}.")
+        else:
+            lines.append("    No internal operation is statically reachable after the service handoff.")
+
     alternative_outcomes: list[str] = []
     successful_outcomes: list[str] = []
     for node_id in reachable_nodes:
@@ -2309,7 +2431,7 @@ def _render_java_call_flow(
         outgoing.setdefault(src, []).append((tgt, data))
         incoming.setdefault(tgt, []).append((src, data))
     feasible_edges, _feasible_nodes, _feasible_bindings = _java_reachable_calls(
-        G, endpoint, outgoing
+        G, endpoint, outgoing, question=question
     )
     feasible_outgoing: dict[str, list[tuple[str, dict]]] = {}
     for _depth, source, target, data in feasible_edges:
@@ -2461,6 +2583,7 @@ def _render_java_call_flow(
             if item[1].get("cross_service")
             or item[0] in cross_reachable
             else 1,
+            0 if item[1].get("_java_context_preferred") else 1,
             0 if is_business_boundary(item[0]) else 1,
             0
             if any(
@@ -2540,7 +2663,10 @@ def _render_java_call_flow(
             lines.append(f"  {_java_flow_symbol(G, endpoint, owners)}")
 
         service_paths: list[tuple[list[tuple[str, str, dict]], bool]] = []
-        contextual_alternatives_omitted = 0
+        contextual_alternatives_omitted = sum(
+            int(data.get("_java_context_alternatives_omitted") or 0)
+            for _depth, _source, _target, data in feasible_edges
+        )
         for first_target, first_data in service_starts:
             path = [(orchestration_current, first_target, first_data)]
             ancestors = orchestration_ancestors | {first_target}
@@ -2668,7 +2794,9 @@ def _render_java_call_flow(
                 f"Context filtering: {contextual_alternatives_omitted} non-matching "
                 "same-service method alternative(s) omitted."
             )
-        _append_java_developer_evidence(lines, G, endpoint, outgoing, owners)
+        _append_java_developer_evidence(
+            lines, G, endpoint, outgoing, owners, question=question
+        )
         return _cut_lines_to_budget(
             lines,
             token_budget,
@@ -2803,7 +2931,9 @@ def _render_java_call_flow(
         lines.append(
             f"Primary terminal: {_java_flow_symbol(G, terminal, owners)} ({reason})"
         )
-    _append_java_developer_evidence(lines, G, endpoint, outgoing, owners)
+    _append_java_developer_evidence(
+        lines, G, endpoint, outgoing, owners, question=question
+    )
     return _cut_lines_to_budget(
         lines,
         token_budget,

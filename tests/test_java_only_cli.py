@@ -266,6 +266,66 @@ class DeviceController {
     assert bridge["confidence_score"] == 0.85
 
 
+def test_method_name_bridge_accepts_unique_enterprise_signature_mismatch(
+    tmp_path: Path,
+):
+    source = tmp_path / "catalog-ds"
+    target = tmp_path / "biz-catalog-service"
+    source.mkdir()
+    target.mkdir()
+    (source / "BizCatalogRepository.java").write_text(
+        '''
+interface BizCatalogRepository {
+    Object getProductOfferingByExternalIds(
+        String credentials,
+        String language,
+        String province,
+        String channel,
+        String productType,
+        java.util.List<String> externalIds,
+        java.util.List<String> requestedFields
+    );
+}
+''',
+        encoding="utf-8",
+    )
+    (target / "SocController.java").write_text(
+        '''
+@RestController
+class SocController {
+    Object getProductOfferingByExternalIds(
+        String language,
+        String province,
+        java.util.List<String> externalIds,
+        java.util.List<String> requestedFields
+    ) { return null; }
+}
+''',
+        encoding="utf-8",
+    )
+    for service in (source, target):
+        result = _run(["extract", str(service), "--no-cluster"], tmp_path)
+        assert result.returncode == 0, result.stderr
+
+    merged = _run([
+        "merge-graphs",
+        str(source / "graphify-out" / "graph.json"),
+        str(target / "graphify-out" / "graph.json"),
+    ], tmp_path)
+    assert merged.returncode == 0, merged.stderr
+    data = json.loads((tmp_path / "graphify-out" / "graph.json").read_text(encoding="utf-8"))
+    bridges = [
+        link for link in data["links"]
+        if link.get("bridge_strategy") == "java_repository_controller_method_name"
+    ]
+    assert len(bridges) == 1
+    bridge = bridges[0]
+    assert bridge["source_parameter_count"] == 7
+    assert bridge["target_parameter_count"] == 4
+    assert bridge["parameter_count_mismatch"] is True
+    assert bridge["confidence_score"] == 0.8
+
+
 def test_method_name_bridge_does_not_guess_between_controllers(tmp_path: Path):
     source = tmp_path / "catalog-ds"
     targets = [tmp_path / "catalog-a", tmp_path / "catalog-b"]
