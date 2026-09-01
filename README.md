@@ -196,6 +196,34 @@ API and method flow questions are route-aware and method-directed:
 /graphify query Explain the flow of PaymentProcessor.process in payment-service
 ```
 
+Choose the audience explicitly when needed:
+
+```bash
+# Developer view: Java call inventory, conditions, DTO request/response types,
+# method contracts, returns, throws, and cross-service E2E paths.
+graphify query \
+  "Explain POST /payments/charge in payment-service" \
+  --audience developer --budget 60000
+
+# BSA view: request meaning, business steps, rules, service interactions and
+# outcomes, without Java call chains or DTO names/types.
+graphify query \
+  "Explain POST /payments/charge in payment-service" \
+  --audience bsa --budget 60000
+```
+
+The audience can also be inferred from wording such as "for a BSA" or
+"business analyst", but `--audience` is recommended for automation. Enhanced
+graphs retain formal parameter names/types and HTTP bindings, return types,
+`if`/`else`, switch, loop, ternary and catch decisions, conditional return/throw
+outcomes, and the condition attached to each call site. Repeated calls to the
+same method are retained as separate call-site evidence on one graph edge.
+The Java extractor also retains terminating guard-clause predicates, invocation
+arguments, Bean Validation constraints, method references, inherited members,
+and calls through chained receivers. Query traversal propagates literal/enum
+arguments and removes statically impossible switch branches consistently from
+the curated E2E path and the complete call inventory.
+
 Graphify maps the exact Spring/Feign route to its controller method, shows the
 incoming cross-service bridge, and follows directed method calls downstream.
 When the same route or method exists in multiple services it returns an explicit
@@ -221,9 +249,20 @@ graphify serve
 - Only `.java` files enter the extraction corpus.
 - Cross-file type references use packages and imports for disambiguation.
 - Receiver-typed member calls resolve only when the target is unique.
+- Java overloads are stored as signature-qualified nodes and resolved by
+  receiver plus argument arity when the full compiler type is unavailable.
+- Repeated call sites are aggregated without losing their individual source
+  locations or branch conditions.
+- Method metadata includes declared request parameters, HTTP bindings, return
+  and response types, decisions, returns, and throws.
 - Ambiguous calls and service boundaries are skipped instead of guessed.
 - Every relationship carries provenance and confidence metadata.
 - Merged node IDs are repository-qualified, preventing cross-service collisions.
+
+These are static-analysis guarantees, not a promise of 100% runtime coverage.
+Reflection, generated code, framework proxies, dynamic URLs, AOP, runtime bean
+selection and asynchronous infrastructure can require additional resolvers,
+contracts or runtime trace correlation.
 
 ## Development
 

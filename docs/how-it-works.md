@@ -37,9 +37,25 @@ questions:
 
 ```bash
 graphify query "How does checkout reach Stripe?"
+graphify query "Explain POST /payments/charge" --audience developer --budget 60000
+graphify query "Explain POST /payments/charge" --audience bsa --budget 60000
 graphify path "CheckoutController" "StripeGateway"
 graphify explain "PaymentClient"
 ```
 
 This keeps answers grounded in the merged end-to-end graph instead of making
 the agent reconstruct the architecture from source on every question.
+
+The developer audience includes the complete reachable production-call
+inventory plus per-method request/response contracts and AST-extracted branch
+conditions. The BSA audience uses the same graph evidence but renders request
+meaning, business operations, decision rules, service interactions and outcomes
+without exposing Java chains or DTO names/types. Older service graphs must be
+rebuilt and re-merged before these enriched sections are available.
+
+Java flow analysis also follows receiver chains through declared return types,
+resolves inherited fields/methods, records method references, carries call
+arguments into downstream parameters, and recognizes conditions implied by an
+earlier terminating guard clause. When an enum/literal argument selects a
+switch branch, impossible alternatives are excluded consistently from the
+architectural path, completeness inventory, BSA rules, and outcomes.

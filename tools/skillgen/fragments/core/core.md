@@ -40,6 +40,13 @@ graph-only requests:
    Account for every numbered graph edge exactly once, preserve service order,
    source locations, `EXTRACTED`/`INFERRED` status, and the meaning of every
    terminal. Never omit a hop or invent evidence that is absent from stdout.
+6. Select the audience explicitly when the user identifies it. Use
+   `--audience developer` for code-level flow, request/response DTO contracts,
+   conditions, and the complete reachable call inventory. Use `--audience bsa`
+   for business rules, request meaning, service interactions, and outcomes
+   without Java class chains or DTO names/types. If output starts with
+   `BUSINESS API FLOW`, preserve every business rule and alternative outcome,
+   but translate only at business level.
 
 ## Workflow
 
