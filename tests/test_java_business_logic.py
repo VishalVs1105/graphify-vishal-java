@@ -231,6 +231,141 @@ def test_java_switch_branches_are_attached_to_calls(tmp_path: Path):
     assert "no explicit type case matches" == default["conditions"][0]["expression"]
 
 
+def test_java_guard_clause_is_attached_to_later_calls(tmp_path: Path):
+    source = tmp_path / "GuardedFlow.java"
+    source.write_text(
+        """
+        class GuardedFlow {
+            RemoteClient client;
+            Result run(Request request) {
+                if (request == null || !request.isValid()) {
+                    throw new IllegalArgumentException("invalid request");
+                }
+                client.authorize(request);
+                if (request.isDryRun()) return Result.preview();
+                return client.commit(request);
+            }
+        }
+        class RemoteClient {
+            void authorize(Request request) {}
+            Result commit(Request request) { return null; }
+        }
+        """,
+        encoding="utf-8",
+    )
+    result = extract([source], root=tmp_path)
+    labels = {node["id"]: node.get("label") for node in result["nodes"]}
+    calls = [edge for edge in result["edges"] if edge.get("relation") == "calls"]
+    authorize = next(edge for edge in calls if labels.get(edge["target"]) == ".authorize()")
+    commit = next(edge for edge in calls if labels.get(edge["target"]) == ".commit()")
+    assert authorize["conditions"][0]["branch"] == "after_guard"
+    assert "request == null" in authorize["conditions"][0]["expression"]
+    assert [value["branch"] for value in commit["conditions"]] == [
+        "after_guard", "after_guard",
+    ]
+    assert "request.isDryRun()" in commit["conditions"][1]["expression"]
+
+
+def test_java_validation_annotations_become_request_rules(tmp_path: Path):
+    source = tmp_path / "ValidationController.java"
+    source.write_text(
+        """
+        @RestController
+        class ValidationController {
+            @GetMapping("/search")
+            Result search(
+                @RequestParam @NotBlank @Size(min = 2, max = 20) String query,
+                @RequestParam @Min(1) @Max(100) int limit
+            ) { return null; }
+        }
+        """,
+        encoding="utf-8",
+    )
+    result = extract([source], root=tmp_path)
+    method = next(node for node in result["nodes"] if node.get("label") == ".search()")
+    query, limit = method["metadata"]["java_parameters"]
+    assert [value["name"] for value in query["constraints"]] == ["NotBlank", "Size"]
+    assert query["constraints"][1]["values"] == {"min": ["2"], "max": ["20"]}
+    assert [value["name"] for value in limit["constraints"]] == ["Min", "Max"]
+
+
+def test_constant_arguments_prune_infeasible_switch_api_calls(tmp_path: Path):
+    source = tmp_path / "CatalogFlow.java"
+    source.write_text(
+        """
+        @RestController
+        class CatalogController {
+            CatalogService service;
+            @GetMapping("/addons")
+            Result addons() { return service.load(ResourceType.ADDON); }
+        }
+        class CatalogService {
+            RemoteClient client;
+            Result load(ResourceType type) {
+                return switch (type) {
+                    case ADDON -> client.loadAddon();
+                    case DEVICE -> client.loadDevice();
+                    default -> throw new IllegalArgumentException("unsupported");
+                };
+            }
+        }
+        class RemoteClient {
+            Result loadAddon() { return null; }
+            Result loadDevice() { return null; }
+        }
+        enum ResourceType { ADDON, DEVICE }
+        """,
+        encoding="utf-8",
+    )
+    result = extract([source], root=tmp_path)
+    graph = nx.Graph()
+    for node in result["nodes"]:
+        graph.add_node(node["id"], **{key: value for key, value in node.items() if key != "id"})
+    for edge in result["edges"]:
+        graph.add_edge(
+            edge["source"], edge["target"],
+            **{
+                **{key: value for key, value in edge.items() if key not in {"source", "target"}},
+                "_src": edge["source"], "_tgt": edge["target"],
+            },
+        )
+    for _node_id, data in graph.nodes(data=True):
+        data["repo"] = "catalog-service"
+
+    load = next(
+        node for node in result["nodes"]
+        if node.get("label") == ".load()" and "catalogservice" in node["id"]
+    )
+    controller_call = next(
+        edge for edge in result["edges"]
+        if edge.get("target") == load["id"] and edge.get("relation") == "calls"
+    )
+    assert controller_call["arguments"] == ["ResourceType.ADDON"]
+
+    output = _query_graph_text(
+        graph,
+        "Explain the complete developer flow of GET /addons in catalog-service",
+        token_budget=60_000,
+        audience="developer",
+    )
+    inventory = output.split("Complete reachable production call inventory:", 1)[1]
+    assert "RemoteClient.loadAddon()" in inventory
+    assert "RemoteClient.loadDevice()" not in inventory
+    assert "resolved as (ResourceType.ADDON) is ADDON" in inventory
+    assert "infeasible" not in output.casefold()
+
+    business = _query_graph_text(
+        graph,
+        "Explain the BSA flow of GET /addons in catalog-service",
+        token_budget=60_000,
+        audience="bsa",
+    )
+    assert "load addon" in business.casefold()
+    assert "load device" not in business.casefold()
+    assert "resource type.addon" in business.casefold()
+    assert "unsupported" not in business.casefold()
+
+
 def test_query_cli_accepts_explicit_bsa_audience(monkeypatch, tmp_path: Path, capsys):
     graph = _business_graph(tmp_path)
     graph_path = tmp_path / "business-graph.json"

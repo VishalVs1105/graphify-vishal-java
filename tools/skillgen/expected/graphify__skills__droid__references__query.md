@@ -76,6 +76,16 @@ view. Preserve both. Contract/condition sections require graphs rebuilt with a
 version that extracts `java_parameters`, `java_return_type`, `java_decisions`,
 `java_outcomes`, call sites, and conditions.
 
+The query engine propagates literal and enum call arguments into downstream
+method parameters. A condition line containing `resolved as` is a statically
+evaluated path constraint; excluded switch alternatives are infeasible for the
+selected API and must not be reintroduced from general source knowledge. Guard
+conditions described as `after terminating guard` mean the earlier return,
+throw, break, or continue did not execute. Method-reference edges are marked
+`INFERRED` because the callback invocation occurs indirectly. Account for
+unresolved-call evidence explicitly; it represents a syntactically observed
+call whose target could not be bound, not permission to guess the target.
+
 For `BUSINESS API FLOW`, use the CLI's business wording as the evidence source.
 Do not add DTO types or reconstruct a Java chain. Preserve all numbered
 business steps, rules, service interactions, successful outcomes, alternative

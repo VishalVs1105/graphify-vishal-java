@@ -218,6 +218,11 @@ graphs retain formal parameter names/types and HTTP bindings, return types,
 `if`/`else`, switch, loop, ternary and catch decisions, conditional return/throw
 outcomes, and the condition attached to each call site. Repeated calls to the
 same method are retained as separate call-site evidence on one graph edge.
+The Java extractor also retains terminating guard-clause predicates, invocation
+arguments, Bean Validation constraints, method references, inherited members,
+and calls through chained receivers. Query traversal propagates literal/enum
+arguments and removes statically impossible switch branches consistently from
+the curated E2E path and the complete call inventory.
 
 Graphify maps the exact Spring/Feign route to its controller method, shows the
 incoming cross-service bridge, and follows directed method calls downstream.

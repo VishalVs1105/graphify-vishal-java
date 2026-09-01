@@ -1299,6 +1299,25 @@ def _java_parameter_text(parameter: dict, *, include_types: bool = True) -> str:
         flags.append("required" if required else "optional")
     if parameter.get("validated"):
         flags.append("validated")
+    constraints: list[str] = []
+    for constraint in parameter.get("constraints") or []:
+        if not isinstance(constraint, dict):
+            continue
+        constraint_name = _java_display_value(constraint.get("name"))
+        values = constraint.get("values")
+        arguments: list[str] = []
+        if isinstance(values, dict):
+            for key, raw_values in values.items():
+                if not isinstance(raw_values, list):
+                    continue
+                arguments.extend(
+                    f"{key}={_java_display_value(value)}" for value in raw_values
+                )
+        constraints.append(
+            constraint_name + (f"({', '.join(arguments)})" if arguments else "")
+        )
+    if constraints:
+        flags.append(f"constraints={'+'.join(constraints)}")
     suffix = f" ({', '.join(flags)})" if flags else ""
     if include_types:
         return f"{binding} {name}: {declared_type}{suffix}"
@@ -1328,16 +1347,23 @@ def _java_contract_summary(G: nx.Graph, node_id: str) -> str | None:
 
 def _java_condition_text(condition: dict) -> str:
     expression = _java_display_value(condition.get("expression")) or "unspecified condition"
+    resolved = _java_display_value(condition.get("resolved_expression"))
     branch = _java_display_value(condition.get("branch"))
     line = _java_display_value(condition.get("line"))
     if branch == "else":
         text = f"otherwise (not {expression})"
+    elif branch == "after_guard":
+        text = f"after terminating guard, when not ({expression})"
+    elif branch == "after_else_guard":
+        text = f"after terminating alternative, when {expression}"
     elif branch in {"then", "while", "for", "for_each"}:
         text = f"when {expression}"
     elif branch == "exception":
         text = f"when handling {expression}"
     else:
         text = f"when {expression}"
+    if resolved and resolved != expression:
+        text += f"; resolved as {resolved}"
     return f"{text} at {line}" if line else text
 
 
@@ -1371,45 +1397,259 @@ def _java_edge_conditions(data: dict) -> list[str]:
     return results
 
 
+def _java_substitute_bindings(expression: object, bindings: dict[str, str]) -> str:
+    text = html.unescape(str(expression or "")).strip()
+    for name in sorted(bindings, key=len, reverse=True):
+        text = re.sub(
+            rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
+            f"({bindings[name]})",
+            text,
+        )
+    return text
+
+
+def _java_compare_atom(value: str) -> str:
+    atom = value.strip().strip("() ").strip('"\'')
+    atom = re.sub(r"^(?:[A-Za-z_$][\w$]*\.)+", "", atom)
+    return atom.casefold()
+
+
+def _java_simple_predicate(expression: str) -> bool | None:
+    """Evaluate only safe, deterministic literal/enum predicates."""
+    text = expression.strip()
+    while text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
+    folded = text.casefold()
+    if folded in {"true", "(true)"}:
+        return True
+    if folded in {"false", "(false)"}:
+        return False
+    equals = re.fullmatch(r"(.+?)\s*(==|!=|\bis\b)\s*(.+)", text)
+    if equals:
+        left, operator, right = equals.groups()
+        left_atom = _java_compare_atom(left)
+        right_atom = _java_compare_atom(right)
+        if not left_atom or not right_atom:
+            return None
+        result = left_atom == right_atom
+        return not result if operator == "!=" else result
+    method_equals = re.fullmatch(r"(.+?)\.equals\((.+)\)", text)
+    if method_equals:
+        return _java_compare_atom(method_equals.group(1)) == _java_compare_atom(
+            method_equals.group(2)
+        )
+    negated = re.fullmatch(r"!\s*\((.+)\)|!\s*(.+)", text)
+    if negated:
+        nested = _java_simple_predicate(negated.group(1) or negated.group(2))
+        return None if nested is None else not nested
+    return None
+
+
+def _java_condition_truth(
+    condition: dict,
+    bindings: dict[str, str],
+) -> bool | None:
+    expression = _java_substitute_bindings(condition.get("expression"), bindings)
+    if expression.casefold().startswith("no explicit "):
+        return None
+    truth = _java_simple_predicate(expression)
+    branch = str(condition.get("branch") or "")
+    if truth is not None and branch in {"else", "after_guard"}:
+        truth = not truth
+    return truth
+
+
+def _java_edge_sites(data: dict) -> list[dict]:
+    sites = data.get("call_sites")
+    if isinstance(sites, list) and sites:
+        return [site for site in sites if isinstance(site, dict)]
+    return [data]
+
+
+def _java_feasible_edge_data(
+    data: dict,
+    bindings: dict[str, str],
+    *,
+    matched_switch_case: bool,
+) -> dict | None:
+    viable: list[dict] = []
+    for site in _java_edge_sites(data):
+        conditions = [
+            value for value in site.get("conditions") or data.get("conditions") or []
+            if isinstance(value, dict)
+        ]
+        if matched_switch_case and any(
+            str(value.get("kind") or "") == "switch"
+            and str(value.get("branch") or "") == "else"
+            for value in conditions
+        ):
+            continue
+        truths = [_java_condition_truth(value, bindings) for value in conditions]
+        if any(value is False for value in truths):
+            continue
+        enriched_site = dict(site)
+        if conditions:
+            enriched_conditions: list[dict] = []
+            for condition in conditions:
+                enriched = dict(condition)
+                resolved = _java_substitute_bindings(
+                    condition.get("expression"), bindings
+                )
+                original = html.unescape(
+                    str(condition.get("expression") or "")
+                ).strip()
+                if resolved and resolved != original:
+                    enriched["resolved_expression"] = resolved
+                enriched_conditions.append(enriched)
+            enriched_site["conditions"] = enriched_conditions
+        viable.append(enriched_site)
+    if not viable:
+        return None
+    filtered = dict(data)
+    if isinstance(data.get("call_sites"), list):
+        filtered["call_sites"] = viable
+        filtered["occurrence_count"] = len(viable)
+    conditions: list[dict] = []
+    for site in viable:
+        for condition in site.get("conditions") or data.get("conditions") or []:
+            if not isinstance(condition, dict):
+                continue
+            enriched = dict(condition)
+            resolved = _java_substitute_bindings(condition.get("expression"), bindings)
+            original = html.unescape(str(condition.get("expression") or "")).strip()
+            if resolved and resolved != original:
+                enriched["resolved_expression"] = resolved
+            if enriched not in conditions:
+                conditions.append(enriched)
+    if conditions:
+        filtered["conditions"] = conditions
+    else:
+        filtered.pop("conditions", None)
+    return filtered
+
+
+def _java_call_argument_sets(data: dict) -> list[list[str]]:
+    values: list[list[str]] = []
+    for site in _java_edge_sites(data):
+        arguments = site.get("arguments") or data.get("arguments")
+        if isinstance(arguments, list):
+            item = [html.unescape(str(value)) for value in arguments]
+            if item not in values:
+                values.append(item)
+    return values
+
+
+def _java_target_binding_sets(
+    G: nx.Graph,
+    source: str,
+    target: str,
+    data: dict,
+    bindings: dict[str, str],
+) -> list[dict[str, str]]:
+    target_parameters = [
+        value for value in _java_metadata(G, target).get("java_parameters") or []
+        if isinstance(value, dict) and value.get("name")
+    ]
+    if not target_parameters:
+        return [{}]
+    argument_sets = _java_call_argument_sets(data)
+    if argument_sets:
+        outputs: list[dict[str, str]] = []
+        for arguments in argument_sets:
+            target_bindings = {
+                str(parameter["name"]): _java_substitute_bindings(argument, bindings)
+                for parameter, argument in zip(target_parameters, arguments)
+            }
+            if target_bindings not in outputs:
+                outputs.append(target_bindings)
+        return outputs or [{}]
+
+    source_parameters = [
+        value for value in _java_metadata(G, source).get("java_parameters") or []
+        if isinstance(value, dict) and value.get("name")
+    ]
+    forwarded: dict[str, str] = {}
+    for index, parameter in enumerate(target_parameters):
+        target_name = str(parameter["name"])
+        source_name = (
+            str(source_parameters[index]["name"])
+            if index < len(source_parameters) else target_name
+        )
+        if source_name in bindings:
+            forwarded[target_name] = bindings[source_name]
+    return [forwarded]
+
+
 def _java_reachable_calls(
+    G: nx.Graph,
     endpoint: str,
     outgoing: dict[str, list[tuple[str, dict]]],
     *,
     max_depth: int = 64,
-) -> tuple[list[tuple[int, str, str, dict]], list[str]]:
-    """Return every reachable call edge once, without choosing a primary branch."""
-    queue: list[tuple[str, int]] = [(endpoint, 0)]
-    expanded: set[str] = set()
+) -> tuple[
+    list[tuple[int, str, str, dict]],
+    list[str],
+    dict[str, list[dict[str, str]]],
+]:
+    """Return feasible reachable calls while propagating constant arguments."""
+    queue: list[tuple[str, int, dict[str, str]]] = [(endpoint, 0, {})]
+    expanded: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
     nodes: list[str] = [endpoint]
     node_seen = {endpoint}
+    bindings_by_node: dict[str, list[dict[str, str]]] = {endpoint: [{}]}
     edges: list[tuple[int, str, str, dict]] = []
     edge_seen: set[tuple[str, str, str, str]] = set()
     while queue:
-        source, depth = queue.pop(0)
-        if source in expanded or depth >= max_depth:
+        source, depth, bindings = queue.pop(0)
+        state_key = (source, tuple(sorted(bindings.items())))
+        if state_key in expanded or depth >= max_depth:
             continue
-        expanded.add(source)
+        expanded.add(state_key)
         values = sorted(
             outgoing.get(source, []),
             key=lambda item: (
-                str(item[1].get("source_location") or ""),
+                int((re.search(r"(?:^|:)L?(\d+)", str(item[1].get("source_location") or "")) or [None, 1_000_000_000])[1]),
                 str(item[0]),
             ),
         )
+        matched_switch_case = any(
+            _java_condition_truth(condition, bindings) is True
+            for _target, edge_data in values
+            for site in _java_edge_sites(edge_data)
+            for condition in site.get("conditions") or edge_data.get("conditions") or []
+            if isinstance(condition, dict)
+            and str(condition.get("kind") or "") == "switch"
+            and str(condition.get("branch") or "") == "case"
+        )
         for target, data in values:
+            feasible_data = _java_feasible_edge_data(
+                data,
+                bindings,
+                matched_switch_case=matched_switch_case,
+            )
+            if feasible_data is None:
+                continue
             key = (
                 source, target,
-                str(data.get("relation") or "calls"),
-                str(data.get("bridge_strategy") or ""),
+                str(feasible_data.get("relation") or "calls"),
+                str(feasible_data.get("bridge_strategy") or ""),
             )
             if key not in edge_seen:
                 edge_seen.add(key)
-                edges.append((depth + 1, source, target, data))
+                edges.append((depth + 1, source, target, feasible_data))
             if target not in node_seen:
                 node_seen.add(target)
                 nodes.append(target)
-                queue.append((target, depth + 1))
-    return edges, nodes
+            for target_bindings in _java_target_binding_sets(
+                G, source, target, feasible_data, bindings
+            ):
+                values_for_target = bindings_by_node.setdefault(target, [])
+                if target_bindings not in values_for_target:
+                    values_for_target.append(target_bindings)
+                target_state = (target, tuple(sorted(target_bindings.items())))
+                if target_state not in expanded and len(expanded) + len(queue) < 2048:
+                    queue.append((target, depth + 1, target_bindings))
+    return edges, nodes, bindings_by_node
 
 
 def _append_java_developer_evidence(
@@ -1420,7 +1660,9 @@ def _append_java_developer_evidence(
     owners: dict[str, str],
 ) -> None:
     """Append exhaustive AST evidence beyond the curated primary-path view."""
-    reachable_edges, reachable_nodes = _java_reachable_calls(endpoint, outgoing)
+    reachable_edges, reachable_nodes, bindings_by_node = _java_reachable_calls(
+        G, endpoint, outgoing
+    )
     has_enriched_metadata = any(
         "java_parameters" in _java_metadata(G, node_id)
         or "java_decisions" in _java_metadata(G, node_id)
@@ -1469,6 +1711,15 @@ def _append_java_developer_evidence(
 
     decision_lines: list[str] = []
     outcome_lines: list[str] = []
+    nodes_with_reachable_switch_branches = {
+        source
+        for _depth, source, _target, data in reachable_edges
+        if any(
+            isinstance(condition, dict)
+            and str(condition.get("kind") or "") == "switch"
+            for condition in data.get("conditions") or []
+        )
+    }
     for node_id in reachable_nodes:
         metadata = _java_metadata(G, node_id)
         symbol = _java_flow_symbol(G, node_id, owners)
@@ -1476,6 +1727,11 @@ def _append_java_developer_evidence(
             if not isinstance(decision, dict):
                 continue
             kind = _java_display_value(decision.get("kind"))
+            if (
+                node_id in nodes_with_reachable_switch_branches
+                and kind in {"switch", "case"}
+            ):
+                continue
             expression = _java_display_value(decision.get("expression"))
             location = _java_display_value(decision.get("line"))
             item = f"{symbol}: {kind} {expression}" + (f" at {location}" if location else "")
@@ -1484,15 +1740,44 @@ def _append_java_developer_evidence(
         for outcome in metadata.get("java_outcomes") or []:
             if not isinstance(outcome, dict):
                 continue
+            raw_conditions = [
+                value for value in outcome.get("conditions") or []
+                if isinstance(value, dict)
+            ]
+            rendered_conditions = raw_conditions
+            if raw_conditions:
+                feasible = None
+                for state in bindings_by_node.get(node_id, [{}]):
+                    matched_switch_case = any(
+                        _java_condition_truth(condition, state) is True
+                        for _target, edge_data in outgoing.get(node_id, [])
+                        for site in _java_edge_sites(edge_data)
+                        for condition in site.get("conditions") or edge_data.get("conditions") or []
+                        if isinstance(condition, dict)
+                        and str(condition.get("kind") or "") == "switch"
+                        and str(condition.get("branch") or "") == "case"
+                    )
+                    feasible = _java_feasible_edge_data(
+                        {"conditions": raw_conditions},
+                        state,
+                        matched_switch_case=matched_switch_case,
+                    )
+                    if feasible is not None:
+                        break
+                if feasible is None:
+                    continue
+                rendered_conditions = [
+                    value for value in feasible.get("conditions") or []
+                    if isinstance(value, dict)
+                ]
             kind = _java_display_value(outcome.get("kind"))
             expression = _java_display_value(outcome.get("expression"))
             location = _java_display_value(outcome.get("line"))
             item = f"{symbol}: {kind} {expression}" + (f" at {location}" if location else "")
-            conditions = outcome.get("conditions")
-            if isinstance(conditions, list) and conditions:
+            if rendered_conditions:
                 item += "; " + " and ".join(
                     _java_condition_text(value)
-                    for value in conditions if isinstance(value, dict)
+                    for value in rendered_conditions
                 )
             if item not in outcome_lines:
                 outcome_lines.append(item)
@@ -1512,9 +1797,58 @@ def _append_java_developer_evidence(
                 continue
             receiver = _java_display_value(unresolved.get("receiver"))
             callee = _java_display_value(unresolved.get("callee"))
+            if (
+                str(unresolved.get("call_kind") or "") == "constructor"
+                and callee.casefold().endswith(("exception", "error"))
+            ):
+                continue
+            raw_conditions = [
+                value for value in unresolved.get("conditions") or []
+                if isinstance(value, dict)
+            ]
+            rendered_conditions = raw_conditions
+            if raw_conditions:
+                feasible = None
+                for state in bindings_by_node.get(node_id, [{}]):
+                    matched_switch_case = any(
+                        _java_condition_truth(condition, state) is True
+                        for _target, edge_data in outgoing.get(node_id, [])
+                        for site in _java_edge_sites(edge_data)
+                        for condition in site.get("conditions") or edge_data.get("conditions") or []
+                        if isinstance(condition, dict)
+                        and str(condition.get("kind") or "") == "switch"
+                        and str(condition.get("branch") or "") == "case"
+                    )
+                    feasible = _java_feasible_edge_data(
+                        {"conditions": raw_conditions},
+                        state,
+                        matched_switch_case=matched_switch_case,
+                    )
+                    if feasible is not None:
+                        break
+                if feasible is None:
+                    continue
+                rendered_conditions = [
+                    value for value in feasible.get("conditions") or []
+                    if isinstance(value, dict)
+                ]
             location = _java_display_value(unresolved.get("source_location"))
-            target = f"{receiver}.{callee}()" if receiver else f"{callee}()"
+            arguments = [
+                _java_display_value(value)
+                for value in unresolved.get("arguments") or []
+            ]
+            signature = ", ".join(arguments)
+            target = (
+                f"{receiver}.{callee}({signature})"
+                if receiver else f"{callee}({signature})"
+            )
             item = f"{symbol}: observed {target} at {location or 'unknown location'}; target unresolved"
+            conditions = [
+                _java_condition_text(value)
+                for value in rendered_conditions
+            ]
+            if conditions:
+                item += "; " + " and ".join(conditions)
             if item not in unresolved_lines:
                 unresolved_lines.append(item)
     lines.append("Observed unresolved Java calls:")
@@ -1560,10 +1894,16 @@ def _java_business_action(G: nx.Graph, node_id: str) -> str:
 
 
 def _java_business_condition(condition: dict) -> str:
-    expression = _java_business_words(condition.get("expression")) or "the condition is met"
+    expression = _java_business_words(
+        condition.get("resolved_expression") or condition.get("expression")
+    ) or "the condition is met"
     branch = str(condition.get("branch") or "")
     if branch == "else":
         return f"Otherwise, when {expression.casefold()} is not satisfied"
+    if branch == "after_guard":
+        return f"After the invalid/stop case is rejected, when {expression.casefold()} is not satisfied"
+    if branch == "after_else_guard":
+        return f"After the alternative stop case, when {expression.casefold()}"
     if branch == "exception":
         return f"When handling {expression.casefold()}"
     return f"When {expression.casefold()}"
@@ -1602,7 +1942,9 @@ def _render_java_business_flow(
     outgoing: dict[str, list[tuple[str, dict]]] = {}
     for source, target, data in call_records:
         outgoing.setdefault(source, []).append((target, data))
-    reachable_edges, reachable_nodes = _java_reachable_calls(endpoint, outgoing)
+    reachable_edges, reachable_nodes, bindings_by_node = _java_reachable_calls(
+        G, endpoint, outgoing
+    )
 
     lines = ["BUSINESS API FLOW"]
     if mapping:
@@ -1640,6 +1982,49 @@ def _render_java_business_flow(
             f"  - {name or 'Unnamed input'} is a {requirement} "
             f"{descriptions.get(binding, 'input')}{validation}."
         )
+        for constraint in parameter.get("constraints") or []:
+            if not isinstance(constraint, dict):
+                continue
+            constraint_name = str(constraint.get("name") or "").casefold()
+            values = constraint.get("values")
+            values = values if isinstance(values, dict) else {}
+            display_name = (name or "This input").casefold()
+            if constraint_name in {"notnull", "nonnull"}:
+                meaning = "must be supplied"
+            elif constraint_name in {"notempty", "notblank"}:
+                meaning = "must contain a value"
+            elif constraint_name == "size":
+                minimum = next(iter(values.get("min") or []), None)
+                maximum = next(iter(values.get("max") or []), None)
+                if minimum is not None and maximum is not None:
+                    meaning = f"must contain between {minimum} and {maximum} items/characters"
+                elif minimum is not None:
+                    meaning = f"must contain at least {minimum} items/characters"
+                elif maximum is not None:
+                    meaning = f"must contain no more than {maximum} items/characters"
+                else:
+                    meaning = "must satisfy the configured size limit"
+            elif constraint_name in {"min", "decimalmin"}:
+                limit = next(iter(values.get("value") or []), "the configured minimum")
+                meaning = f"must be at least {limit}"
+            elif constraint_name in {"max", "decimalmax"}:
+                limit = next(iter(values.get("value") or []), "the configured maximum")
+                meaning = f"must be no greater than {limit}"
+            elif constraint_name == "email":
+                meaning = "must be a valid email address"
+            elif constraint_name == "pattern":
+                meaning = "must match the configured format"
+            elif constraint_name.startswith("positive"):
+                meaning = "must be zero or positive" if constraint_name.endswith("orzero") else "must be positive"
+            elif constraint_name.startswith("negative"):
+                meaning = "must be zero or negative" if constraint_name.endswith("orzero") else "must be negative"
+            elif constraint_name.startswith("past"):
+                meaning = "must be a past date/time"
+            elif constraint_name.startswith("future"):
+                meaning = "must be a future date/time"
+            else:
+                meaning = f"must satisfy the {constraint_name} rule"
+            lines.append(f"    Rule: {display_name} {meaning}.")
 
     lines.append("Business process:")
     action_seen: set[tuple[str, str, str]] = set()
@@ -1648,10 +2033,6 @@ def _render_java_business_flow(
         source_repo = str(G.nodes[source].get("repo") or endpoint_repo)
         target_repo = str(G.nodes[target].get("repo") or source_repo)
         action = _java_business_action(G, target)
-        key = (target_repo, action, str(data.get("bridge_strategy") or ""))
-        if key in action_seen:
-            continue
-        action_seen.add(key)
         prefix = f"In {target_repo}, " if target_repo else ""
         if data.get("cross_service") and source_repo != target_repo:
             prefix = f"The process requests {target_repo} to "
@@ -1667,6 +2048,10 @@ def _render_java_business_flow(
                 condition_suffix = f" ({'; '.join(phrases)})"
         elif condition_values:
             condition_suffix = f" ({'; '.join(condition_values)})"
+        key = (target_repo, action, condition_suffix)
+        if key in action_seen:
+            continue
+        action_seen.add(key)
         business_steps.append(f"{prefix}{action.casefold()}{condition_suffix}.")
     if business_steps:
         for number, step in enumerate(business_steps, 1):
@@ -1675,6 +2060,24 @@ def _render_java_business_flow(
         lines.append("  No downstream business operations are recorded in the graph.")
 
     rules: list[str] = []
+    rule_expressions: dict[str, set[str]] = {}
+    nodes_with_branch_edges: set[str] = set()
+    for _depth, source, target, data in reachable_edges:
+        repo = str(G.nodes[source].get("repo") or endpoint_repo)
+        action = _java_business_action(G, target).casefold()
+        for condition in data.get("conditions") or []:
+            if not isinstance(condition, dict):
+                continue
+            nodes_with_branch_edges.add(source)
+            original = html.unescape(str(condition.get("expression") or "")).strip()
+            rule_expressions.setdefault(source, set()).add(original)
+            phrase = _java_business_condition(condition)
+            rule = (
+                f"In {repo}, {phrase[:1].casefold() + phrase[1:]} "
+                f"before the process performs {action}."
+            )
+            if rule not in rules:
+                rules.append(rule)
     for node_id in reachable_nodes:
         metadata = _java_metadata(G, node_id)
         repo = str(G.nodes[node_id].get("repo") or endpoint_repo)
@@ -1682,6 +2085,13 @@ def _render_java_business_flow(
             if not isinstance(decision, dict):
                 continue
             kind = str(decision.get("kind") or "condition")
+            raw_expression = html.unescape(str(decision.get("expression") or "")).strip()
+            if raw_expression in rule_expressions.get(node_id, set()):
+                continue
+            if node_id in nodes_with_branch_edges and kind in {"switch", "case"}:
+                # Reachable branch-edge conditions already identify the selected
+                # switch alternatives; do not reintroduce infeasible cases here.
+                continue
             expression = _java_business_words(decision.get("expression"))
             if not expression:
                 continue
@@ -1727,12 +2137,41 @@ def _render_java_business_flow(
         for outcome in metadata.get("java_outcomes") or []:
             if not isinstance(outcome, dict):
                 continue
+            raw_conditions = [
+                value for value in outcome.get("conditions") or []
+                if isinstance(value, dict)
+            ]
+            rendered_conditions = raw_conditions
+            if raw_conditions:
+                feasible = None
+                for state in bindings_by_node.get(node_id, [{}]):
+                    matched_switch_case = any(
+                        _java_condition_truth(condition, state) is True
+                        for _target, edge_data in outgoing.get(node_id, [])
+                        for site in _java_edge_sites(edge_data)
+                        for condition in site.get("conditions") or edge_data.get("conditions") or []
+                        if isinstance(condition, dict)
+                        and str(condition.get("kind") or "") == "switch"
+                        and str(condition.get("branch") or "") == "case"
+                    )
+                    feasible = _java_feasible_edge_data(
+                        {"conditions": raw_conditions},
+                        state,
+                        matched_switch_case=matched_switch_case,
+                    )
+                    if feasible is not None:
+                        break
+                if feasible is None:
+                    continue
+                rendered_conditions = [
+                    value for value in feasible.get("conditions") or []
+                    if isinstance(value, dict)
+                ]
             kind = str(outcome.get("kind") or "")
             expression = _java_business_words(outcome.get("expression"))
-            raw_conditions = outcome.get("conditions")
             conditions = [
                 _java_business_condition(value)
-                for value in raw_conditions or [] if isinstance(value, dict)
+                for value in rendered_conditions
             ]
             suffix = f"; {' and '.join(conditions).casefold()}" if conditions else ""
             if kind == "throw":
@@ -1752,10 +2191,43 @@ def _render_java_business_flow(
     for item in alternative_outcomes:
         lines.append(f"  - Alternative outcome: {item}")
 
-    unresolved_count = sum(
-        len(_java_metadata(G, node_id).get("java_unresolved_calls") or [])
-        for node_id in reachable_nodes
-    )
+    unresolved_count = 0
+    for node_id in reachable_nodes:
+        for unresolved in _java_metadata(G, node_id).get("java_unresolved_calls") or []:
+            if not isinstance(unresolved, dict):
+                continue
+            callee = str(unresolved.get("callee") or "")
+            if (
+                str(unresolved.get("call_kind") or "") == "constructor"
+                and callee.casefold().endswith(("exception", "error"))
+            ):
+                continue
+            conditions = [
+                value for value in unresolved.get("conditions") or []
+                if isinstance(value, dict)
+            ]
+            if conditions:
+                is_feasible = False
+                for state in bindings_by_node.get(node_id, [{}]):
+                    matched_switch_case = any(
+                        _java_condition_truth(condition, state) is True
+                        for _target, edge_data in outgoing.get(node_id, [])
+                        for site in _java_edge_sites(edge_data)
+                        for condition in site.get("conditions") or edge_data.get("conditions") or []
+                        if isinstance(condition, dict)
+                        and str(condition.get("kind") or "") == "switch"
+                        and str(condition.get("branch") or "") == "case"
+                    )
+                    if _java_feasible_edge_data(
+                        {"conditions": conditions},
+                        state,
+                        matched_switch_case=matched_switch_case,
+                    ) is not None:
+                        is_feasible = True
+                        break
+                if not is_feasible:
+                    continue
+            unresolved_count += 1
 
     lines.extend([
         "Evidence boundaries:",
@@ -1836,6 +2308,16 @@ def _render_java_call_flow(
     for src, tgt, data in call_records:
         outgoing.setdefault(src, []).append((tgt, data))
         incoming.setdefault(tgt, []).append((src, data))
+    feasible_edges, _feasible_nodes, _feasible_bindings = _java_reachable_calls(
+        G, endpoint, outgoing
+    )
+    feasible_outgoing: dict[str, list[tuple[str, dict]]] = {}
+    for _depth, source, target, data in feasible_edges:
+        feasible_outgoing.setdefault(source, []).append((target, data))
+    # Every later path/branch decision must use the same constant-propagated
+    # feasible graph as the completeness inventory.  Otherwise the curated
+    # path can claim a DEVICE branch while the selected API passed ADDON.
+    outgoing = feasible_outgoing
     def downstream_priority(item: tuple[str, dict]) -> tuple[int, int, int, str]:
         target, data = item
         target_edges = outgoing.get(target, [])
@@ -2003,6 +2485,8 @@ def _render_java_call_flow(
             f"[{_java_flow_edge_details(data)}]--> "
             f"{_java_flow_symbol(G, tgt, owners)}{at}"
         )
+        for condition in _java_edge_conditions(data):
+            lines.append(f"      Condition: {condition}")
 
     def terminal_reason(node_id: str) -> str:
         folded = owner_label(node_id).casefold()
@@ -2219,6 +2703,8 @@ def _render_java_call_flow(
                 f"[{_java_flow_edge_details(data)}]--> "
                 f"{_java_flow_symbol(G, tgt, owners)}{at}"
             )
+            for condition in _java_edge_conditions(data):
+                lines.append(f"      Condition: {condition}")
     else:
         lines.append("  (none recorded in the graph)")
 
@@ -2278,6 +2764,8 @@ def _render_java_call_flow(
                     f"--{relation} [{_java_flow_edge_details(data)}]--> "
                     f"{_java_flow_symbol(G, tgt, owners)}{at}"
                 )
+                for condition in _java_edge_conditions(data):
+                    lines.append(f"        Condition: {condition}")
             terminal = branch_edges[-1][1]
             if depth_limited:
                 lines.append(

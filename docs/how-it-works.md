@@ -52,3 +52,10 @@ conditions. The BSA audience uses the same graph evidence but renders request
 meaning, business operations, decision rules, service interactions and outcomes
 without exposing Java chains or DTO names/types. Older service graphs must be
 rebuilt and re-merged before these enriched sections are available.
+
+Java flow analysis also follows receiver chains through declared return types,
+resolves inherited fields/methods, records method references, carries call
+arguments into downstream parameters, and recognizes conditions implied by an
+earlier terminating guard clause. When an enum/literal argument selects a
+switch branch, impossible alternatives are excluded consistently from the
+architectural path, completeness inventory, BSA rules, and outcomes.

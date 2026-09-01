@@ -850,13 +850,15 @@ def _java_annotation_contract(annotation, source: bytes) -> dict[str, object]:
     )
     if arguments is not None:
         for child in arguments.named_children:
-            if child.type != "element_value_pair":
-                continue
-            key_node = child.child_by_field_name("key")
-            value_node = child.child_by_field_name("value")
-            key = _read_text(key_node, source).strip() if key_node is not None else "value"
-            raw = _java_compact_source(value_node, source)
-            if key.casefold() in {"required", "defaultvalue"} and raw:
+            if child.type == "element_value_pair":
+                key_node = child.child_by_field_name("key")
+                value_node = child.child_by_field_name("value")
+                key = _read_text(key_node, source).strip() if key_node is not None else "value"
+                raw = _java_compact_source(value_node, source)
+            else:
+                key = "value"
+                raw = _java_compact_source(child, source)
+            if raw and not values.get(key):
                 values.setdefault(key, [raw])
     result: dict[str, object] = {"name": name}
     if values:
@@ -898,6 +900,19 @@ def _java_parameter_contract(parameter, source: bytes) -> dict[str, object]:
     if annotations:
         contract["annotations"] = annotations
     contract["validated"] = bool(annotation_names & {"valid", "validated"})
+    validation_names = {
+        "notnull", "nonnull", "notempty", "notblank", "null", "size",
+        "min", "max", "decimalmin", "decimalmax", "positive",
+        "positiveorzero", "negative", "negativeorzero", "digits", "pattern",
+        "email", "past", "pastorpresent", "future", "futureorpresent",
+        "asserttrue", "assertfalse",
+    }
+    constraints = [
+        annotation for annotation in annotations
+        if str(annotation.get("name") or "").casefold() in validation_names
+    ]
+    if constraints:
+        contract["constraints"] = constraints
     for annotation in annotations:
         if str(annotation.get("name") or "").casefold() not in {
             "pathvariable", "requestparam", "requestheader", "cookievalue",
@@ -926,6 +941,124 @@ def _java_contains(outer, inner) -> bool:
         and outer.start_byte <= inner.start_byte
         and inner.end_byte <= outer.end_byte
     )
+
+
+def _java_receiver_descriptor(
+    receiver,
+    source: bytes,
+) -> tuple[str | None, str | None, list[dict[str, object]]]:
+    """Describe a Java receiver, including chained invocation return hops.
+
+    ``clientFactory.create().charge()`` is represented as base receiver
+    ``clientFactory`` plus a ``create/0`` hop.  Corpus-level resolution can then
+    follow the declared return type of ``create`` before binding ``charge``.
+    """
+    if receiver is None:
+        return None, None, []
+    if receiver.type == "parenthesized_expression":
+        nested = next((child for child in receiver.named_children), None)
+        return _java_receiver_descriptor(nested, source)
+    if receiver.type == "identifier":
+        return _read_text(receiver, source), None, []
+    if receiver.type == "this":
+        return "this", None, []
+    if receiver.type == "field_access":
+        owner = receiver.child_by_field_name("object")
+        field = receiver.child_by_field_name("field")
+        if owner is not None and owner.type == "this" and field is not None:
+            return f"this.{_read_text(field, source)}", None, []
+        text = _java_compact_source(receiver, source)
+        return text or None, None, []
+    if receiver.type == "object_creation_expression":
+        type_name = _java_receiver_type_name(
+            receiver.child_by_field_name("type"), source
+        )
+        return "<new>", type_name, []
+    if receiver.type == "cast_expression":
+        type_name = _java_receiver_type_name(
+            receiver.child_by_field_name("type"), source
+        )
+        return "<cast>", type_name, []
+    if receiver.type == "method_invocation":
+        inner = receiver.child_by_field_name("object")
+        if inner is None:
+            base_receiver, type_hint, chain = "this", None, []
+        else:
+            base_receiver, type_hint, chain = _java_receiver_descriptor(inner, source)
+        name_node = receiver.child_by_field_name("name")
+        arguments = receiver.child_by_field_name("arguments")
+        if name_node is None:
+            return base_receiver, type_hint, chain
+        hop = {
+            "callee": _read_text(name_node, source),
+            "argument_count": len(arguments.named_children) if arguments is not None else 0,
+        }
+        return base_receiver, type_hint, [*chain, hop]
+    text = _java_compact_source(receiver, source)
+    return text or None, None, []
+
+
+def _java_statement_exits(statement) -> bool:
+    """Whether a Java statement guarantees leaving its current flow path."""
+    if statement is None:
+        return False
+    if statement.type in {
+        "return_statement", "throw_statement", "break_statement", "continue_statement",
+    }:
+        return True
+    if statement.type in {"block", "constructor_body"}:
+        named = list(statement.named_children)
+        return bool(named and _java_statement_exits(named[-1]))
+    if statement.type == "if_statement":
+        consequence = statement.child_by_field_name("consequence")
+        alternative = statement.child_by_field_name("alternative")
+        return bool(
+            alternative is not None
+            and _java_statement_exits(consequence)
+            and _java_statement_exits(alternative)
+        )
+    return False
+
+
+def _java_preceding_guard_conditions(node, source: bytes) -> list[dict[str, object]]:
+    """Infer path predicates created by earlier terminating guard clauses."""
+    guards: list[dict[str, object]] = []
+    current = node
+    while current is not None and current.type not in {
+        "method_declaration", "constructor_declaration",
+    }:
+        parent = current.parent
+        if parent is not None and parent.type in {"block", "constructor_body"}:
+            siblings = list(parent.named_children)
+            try:
+                position = siblings.index(current)
+            except ValueError:
+                position = -1
+            if position >= 0:
+                for previous in siblings[:position]:
+                    if previous.type != "if_statement":
+                        continue
+                    expression = _java_condition_expression(previous, source)
+                    if not expression:
+                        continue
+                    consequence = previous.child_by_field_name("consequence")
+                    alternative = previous.child_by_field_name("alternative")
+                    consequence_exits = _java_statement_exits(consequence)
+                    alternative_exits = _java_statement_exits(alternative)
+                    if consequence_exits and not alternative_exits:
+                        guards.append({
+                            "kind": "guard", "branch": "after_guard",
+                            "expression": expression,
+                            "line": f"L{previous.start_point[0] + 1}",
+                        })
+                    elif alternative_exits and not consequence_exits:
+                        guards.append({
+                            "kind": "guard", "branch": "after_else_guard",
+                            "expression": expression,
+                            "line": f"L{previous.start_point[0] + 1}",
+                        })
+        current = parent
+    return guards
 
 
 def _java_condition_expression(node, source: bytes) -> str:
@@ -1030,7 +1163,16 @@ def _java_call_conditions(call_node, source: bytes) -> list[dict[str, object]]:
             })
         current = current.parent
     conditions.reverse()
-    return conditions[:20]
+    conditions.extend(_java_preceding_guard_conditions(call_node, source))
+    unique: list[dict[str, object]] = []
+    for condition in conditions:
+        if condition not in unique:
+            unique.append(condition)
+    unique.sort(key=lambda value: (
+        int(str(value.get("line") or "L0").lstrip("L") or 0),
+        str(value.get("branch") or ""),
+    ))
+    return unique[:20]
 
 
 def _java_method_logic(method_node, source: bytes) -> tuple[list[dict], list[dict]]:
@@ -1086,8 +1228,14 @@ def _java_method_logic(method_node, source: bytes) -> tuple[list[dict], list[dic
             })
         elif node.type == "return_statement":
             value = next((child for child in node.named_children), None)
+            if value is not None and value.type == "switch_expression":
+                outcome_expression = "selected switch result"
+            elif value is not None and value.type == "ternary_expression":
+                outcome_expression = "selected conditional result"
+            else:
+                outcome_expression = _java_compact_source(value, source)
             outcomes.append({
-                "kind": "return", "expression": _java_compact_source(value, source),
+                "kind": "return", "expression": outcome_expression,
                 "line": line, "conditions": _java_call_conditions(node, source),
             })
         elif node.type == "throw_statement":
@@ -4805,6 +4953,8 @@ def _extract_generic(
             is_this_field_call: bool = False
             swift_receiver: str | None = None
             member_receiver: str | None = None
+            java_receiver_type_hint: str | None = None
+            java_receiver_chain: list[dict[str, object]] = []
             java_conditions = (
                 _java_call_conditions(node, source)
                 if config.ts_module == "tree_sitter_java"
@@ -4815,6 +4965,11 @@ def _extract_generic(
                 len(java_arguments.named_children)
                 if config.ts_module == "tree_sitter_java" and java_arguments is not None
                 else None
+            )
+            java_argument_values = (
+                [_java_compact_source(argument, source) for argument in java_arguments.named_children]
+                if config.ts_module == "tree_sitter_java" and java_arguments is not None
+                else []
             )
 
             # Special handling per language
@@ -4982,6 +5137,20 @@ def _extract_generic(
                         raw = _read_text(type_node, source).split("<", 1)[0].strip()
                         if raw:
                             callee_name = raw.rsplit(".", 1)[-1]
+                elif node.type == "method_reference":
+                    named = list(node.named_children)
+                    if len(named) >= 2:
+                        receiver = named[0]
+                        callee_name = _read_text(named[-1], source)
+                        is_member_call = True
+                        (
+                            member_receiver,
+                            java_receiver_type_hint,
+                            java_receiver_chain,
+                        ) = _java_receiver_descriptor(receiver, source)
+                        is_this_field_call = bool(
+                            member_receiver and member_receiver.startswith("this.")
+                        )
                 elif node.type == "method_invocation":
                     name_node = node.child_by_field_name("name")
                     if name_node is not None:
@@ -4989,16 +5158,14 @@ def _extract_generic(
                     receiver = node.child_by_field_name("object")
                     if receiver is not None:
                         is_member_call = True
-                        if receiver.type == "identifier":
-                            member_receiver = _read_text(receiver, source)
-                        elif receiver.type == "this":
-                            member_receiver = "this"
-                        elif receiver.type == "field_access":
-                            owner = receiver.child_by_field_name("object")
-                            field = receiver.child_by_field_name("field")
-                            if owner is not None and owner.type == "this" and field is not None:
-                                member_receiver = f"this.{_read_text(field, source)}"
-                                is_this_field_call = True
+                        (
+                            member_receiver,
+                            java_receiver_type_hint,
+                            java_receiver_chain,
+                        ) = _java_receiver_descriptor(receiver, source)
+                        is_this_field_call = bool(
+                            member_receiver and member_receiver.startswith("this.")
+                        )
                     else:
                         # An unqualified Java invocation resolves against the
                         # enclosing type (`helper(x)` is effectively
@@ -5116,8 +5283,18 @@ def _extract_generic(
                             "source": caller_nid,
                             "target": tgt_nid,
                             "relation": "calls",
-                            "context": "call",
-                            "confidence": "EXTRACTED",
+                            "context": (
+                                "method_reference"
+                                if node.type == "method_reference" else "call"
+                            ),
+                            "confidence": (
+                                "INFERRED"
+                                if node.type == "method_reference" else "EXTRACTED"
+                            ),
+                            **(
+                                {"confidence_score": 0.8}
+                                if node.type == "method_reference" else {}
+                            ),
                             "source_file": str_path,
                             "source_location": f"L{line}",
                             "weight": 1.0,
@@ -5126,6 +5303,7 @@ def _extract_generic(
                                 {"argument_count": java_argument_count}
                                 if java_argument_count is not None else {}
                             ),
+                            **({"arguments": java_argument_values} if java_argument_values else {}),
                         })
                 elif callee_name and not tgt_nid:
                     # Callee not in this file — save for cross-file resolution in extract()
@@ -5137,10 +5315,20 @@ def _extract_generic(
                         "source_location": f"L{node.start_point[0] + 1}",
                         "receiver": swift_receiver or member_receiver,
                     }
+                    if config.ts_module == "tree_sitter_java":
+                        rc_entry["call_kind"] = (
+                            "constructor"
+                            if node.type == "object_creation_expression"
+                            else "method_reference"
+                            if node.type == "method_reference"
+                            else "method"
+                        )
                     if java_conditions:
                         rc_entry["conditions"] = java_conditions
                     if java_argument_count is not None:
                         rc_entry["argument_count"] = java_argument_count
+                    if java_argument_values:
+                        rc_entry["arguments"] = java_argument_values
                     # Ruby: attach the receiver's inferred type from the method's
                     # local `var = Const.new` bindings, when unambiguously known.
                     if member_receiver and config.ts_module == "tree_sitter_ruby":
@@ -5165,9 +5353,14 @@ def _extract_generic(
                             rc_entry["receiver_type"] = receiver_type
                     if config.ts_module == "tree_sitter_java":
                         rc_entry["lang"] = "java"
-                        receiver_type = (receiver_types or {}).get(member_receiver or "")
+                        receiver_type = (
+                            java_receiver_type_hint
+                            or (receiver_types or {}).get(member_receiver or "")
+                        )
                         if receiver_type:
                             rc_entry["receiver_type"] = receiver_type
+                        if java_receiver_chain:
+                            rc_entry["receiver_chain"] = java_receiver_chain
                     raw_calls.append(rc_entry)
 
             # Indirect dispatch: a function passed BY NAME as a call argument
@@ -5538,6 +5731,17 @@ def _extract_generic(
             result["ts_type_table"] = {"path": str_path, "table": type_table}
         elif config.ts_module == "tree_sitter_cpp":
             result["cpp_type_table"] = {"path": str_path, "table": type_table}
+    if config.ts_module == "tree_sitter_java" and java_field_types:
+        node_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
+        for class_nid, fields in java_field_types.items():
+            class_node = node_by_id.get(class_nid)
+            if class_node is None or not fields:
+                continue
+            metadata = dict(class_node.get("metadata") or {})
+            metadata["java_fields"] = sanitize_metadata(
+                {"java_fields": fields}
+            )["java_fields"]
+            class_node["metadata"] = metadata
     return result
 
 def _python_decorator_name(deco_node, source: bytes) -> str | None:
