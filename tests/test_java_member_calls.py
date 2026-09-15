@@ -216,11 +216,17 @@ def test_overloaded_callers_keep_body_scoped_receiver_types(tmp_path: Path):
         ),
     })
 
-    run = _find(result, ".run()", "checkout")
+    runs = {
+        node["metadata"]["java_parameters"][0]["type"]: node["id"]
+        for node in result["nodes"]
+        if node.get("label") == ".run()" and "checkout" in node["id"]
+    }
     gateway_charge = _find(result, ".charge()", "paymentgateway")
     audit_charge = _find(result, ".charge()", "auditlog")
-    assert (run, gateway_charge) in calls
-    assert (run, audit_charge) in calls
+    assert (runs["int"], gateway_charge) in calls
+    assert (runs["int"], audit_charge) not in calls
+    assert (runs["String"], audit_charge) in calls
+    assert (runs["String"], gateway_charge) not in calls
 
 
 def test_ambiguous_receiver_type_emits_no_edge(tmp_path: Path):
@@ -241,7 +247,7 @@ def test_ambiguous_receiver_type_emits_no_edge(tmp_path: Path):
     assert send_targets == set()
 
 
-def test_inherited_field_and_chained_receiver_are_deferred(tmp_path: Path):
+def test_inherited_field_and_chained_receiver_are_resolved(tmp_path: Path):
     calls, result = _calls(tmp_path, {
         "Services.java": (
             "class Gateway { void charge() {} Gateway create() { return this; } }\n"
@@ -256,8 +262,47 @@ def test_inherited_field_and_chained_receiver_are_deferred(tmp_path: Path):
 
     inherited = _find(result, ".inherited()", "checkout")
     chained = _find(result, ".chained()", "checkout")
-    assert not any(source in {inherited, chained} and "charge" in target
-                   for source, target in calls)
+    gateway_charge = _find(result, ".charge()", "gateway")
+    assert (inherited, gateway_charge) in calls
+    assert (chained, gateway_charge) in calls
+
+
+def test_cast_and_new_expression_receivers_are_resolved(tmp_path: Path):
+    calls, result = _calls(tmp_path, {
+        "Gateway.java": "class Gateway { void charge() {} }\n",
+        "Checkout.java": (
+            "class Checkout {\n"
+            "    void casted(Object value) { ((Gateway) value).charge(); }\n"
+            "    void created() { new Gateway().charge(); }\n"
+            "}\n"
+        ),
+    })
+
+    gateway_charge = _find(result, ".charge()", "gateway")
+    assert (_find(result, ".casted()", "checkout"), gateway_charge) in calls
+    assert (_find(result, ".created()", "checkout"), gateway_charge) in calls
+
+
+def test_method_references_are_retained_as_inferred_calls(tmp_path: Path):
+    calls, result = _calls(tmp_path, {
+        "Worker.java": "class Worker { void process(Item item) {} }\n",
+        "Batch.java": (
+            "class Batch {\n"
+            "    Worker worker;\n"
+            "    void run(java.util.List<Item> items) { items.forEach(worker::process); }\n"
+            "}\n"
+        ),
+    })
+
+    run = _find(result, ".run()", "batch")
+    process = _find(result, ".process()", "worker")
+    assert (run, process) in calls
+    edge = next(
+        edge for edge in result["edges"]
+        if edge.get("source") == run and edge.get("target") == process
+    )
+    assert edge["context"] == "method_reference"
+    assert edge["confidence"] == "INFERRED"
 
 
 def test_unqualified_call_still_resolves(tmp_path: Path):

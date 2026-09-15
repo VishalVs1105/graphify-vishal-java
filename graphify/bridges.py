@@ -209,8 +209,8 @@ def derive_java_method_name_bridges(G: nx.Graph) -> list[tuple[str, str, dict]]:
         if data.get("relation") == "method" and source in G and target in G:
             methods_by_owner.setdefault(source, []).append(target)
 
-    inbound_by_name: dict[str, list[tuple[str, str]]] = {}
-    outbound: list[tuple[str, str, str]] = []
+    inbound_by_name: dict[str, list[tuple[str, str, int | None]]] = {}
+    outbound: list[tuple[str, str, str, int | None]] = []
     for owner, methods in methods_by_owner.items():
         role = _java_class_http_role(G.nodes[owner])
         if role not in {"inbound", "outbound"}:
@@ -220,12 +220,19 @@ def derive_java_method_name_bridges(G: nx.Graph) -> list[tuple[str, str, dict]]:
             continue
         for method in methods:
             name = _java_method_name(G.nodes[method])
+            metadata = G.nodes[method].get("metadata")
+            parameter_count = (
+                metadata.get("java_parameter_count")
+                if isinstance(metadata, dict)
+                and isinstance(metadata.get("java_parameter_count"), int)
+                else None
+            )
             if not name or name in _JAVA_GENERIC_METHOD_NAMES or len(name) < 6:
                 continue
             if role == "inbound":
-                inbound_by_name.setdefault(name, []).append((method, owner_repo))
+                inbound_by_name.setdefault(name, []).append((method, owner_repo, parameter_count))
             else:
-                outbound.append((method, owner_repo, name))
+                outbound.append((method, owner_repo, name, parameter_count))
 
     bridged_sources = {
         source
@@ -236,30 +243,53 @@ def derive_java_method_name_bridges(G: nx.Graph) -> list[tuple[str, str, dict]]:
         != str(G.nodes[target].get("repo", ""))
     }
     derived: list[tuple[str, str, dict]] = []
-    for source, source_repo, name in outbound:
+    for source, source_repo, name, source_parameter_count in outbound:
         if source in bridged_sources:
             continue
         candidates = {
-            target
-            for target, target_repo in inbound_by_name.get(name, [])
+            target: target_parameter_count
+            for target, target_repo, target_parameter_count in inbound_by_name.get(name, [])
             if target_repo != source_repo
         }
-        if len(candidates) != 1:
+        # Enterprise HTTP clients frequently expose internal authentication,
+        # channel and routing arguments that are not controller parameters.
+        # Exact arity is therefore useful for disambiguation, but a mismatch
+        # must not reject the only exact method-name match in another service.
+        exact_arity = {
+            target: target_parameter_count
+            for target, target_parameter_count in candidates.items()
+            if source_parameter_count is not None
+            and target_parameter_count is not None
+            and source_parameter_count == target_parameter_count
+        }
+        if len(exact_arity) == 1:
+            selected = exact_arity
+        elif len(candidates) == 1:
+            selected = candidates
+        else:
             continue
-        target = next(iter(candidates))
+        target, target_parameter_count = next(iter(selected.items()))
+        parameter_count_mismatch = (
+            source_parameter_count is not None
+            and target_parameter_count is not None
+            and source_parameter_count != target_parameter_count
+        )
         derived.append((
             source,
             target,
             {
                 "relation": "calls",
                 "confidence": "INFERRED",
-                "confidence_score": 0.85,
+                "confidence_score": 0.8 if parameter_count_mismatch else 0.85,
                 "source_file": "graphify:auto-java-method-name-bridge",
                 "source_location": None,
                 "weight": 1.0,
                 "cross_service": True,
                 "bridge_strategy": "java_repository_controller_method_name",
                 "method_name": name,
+                "source_parameter_count": source_parameter_count,
+                "target_parameter_count": target_parameter_count,
+                "parameter_count_mismatch": parameter_count_mismatch,
                 "_src": source,
                 "_tgt": target,
             },
