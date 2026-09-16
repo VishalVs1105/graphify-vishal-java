@@ -1,78 +1,13 @@
-# GitHub repositories and Java service merging
+# Optional GitHub and multi-service graphs
 
-Clone a GitHub repository with:
-
-```bash
-graphify clone https://github.com/<owner>/<repo>
-```
-
-Graphify prints the local checkout path. Build each Java service separately:
+Start with accurate individual Java graphs and review their API documentation. Merging is secondary.
 
 ```bash
-graphify extract ./checkout-service
-graphify extract ./payment-service
+graphify extract ./repoA --no-cluster
+graphify extract ./repoB --no-cluster
+graphify merge-graphs ./repoA/graphify-out/graph.json ./repoB/graphify-out/graph.json
 ```
 
-Merge their graphs at the workspace root:
+Use merge-graphs --help for output options. Merging namespaces repository identities so same-named Java classes are not automatically the same entity. Existing HTTP route and method-name bridge heuristics remain inferred evidence, not verified network traces. Review ambiguous or missing connections. Never manufacture a bridge merely to make a path look complete.
 
-```bash
-graphify merge-graphs \
-  ./checkout-service/graphify-out/graph.json \
-  ./payment-service/graphify-out/graph.json
-graphify cluster-only .
-```
-
-The default output is `graphify-out/graph.json`. Each node keeps its source
-repository. During extraction, Graphify records Spring/Feign HTTP annotations.
-During merge, a unique outbound repository/client method is connected to the
-controller handler with the same HTTP verb and normalized route. Path-variable
-names do not need to match (`/soc/{id}` matches `/soc/{socId}`). This supports
-enterprise interfaces such as `BizCatalogRepository` without a manual bridge.
-
-If route annotations use constants, merge next tries an exact, unique method
-name between an outbound repository/client and a controller in another service.
-It does not bridge generic or ambiguous method names.
-
-As a fallback, an unambiguous `*Client` class is connected to a same-stem
-`*Controller` in another service. For example:
-
-```text
-CheckoutController -> OrderService -> PaymentClient
-PaymentClient -> PaymentController
-PaymentController -> PaymentProcessor -> StripeGateway
-```
-
-Route bridges are marked `cross_service=true` with
-`bridge_strategy=java_http_route`. Naming fallback bridges use
-`bridge_strategy=java_repository_controller_method_name` for methods or
-`bridge_strategy=java_client_controller_name` for classes.
-
-If both routes and method names differ, or endpoints are ambiguous, create a
-bridge contract:
-
-```json
-{
-  "bridges": [
-    {
-      "source_repo": "checkout-service",
-      "source": "PaymentClient",
-      "target_repo": "payment-service",
-      "target": "PaymentController",
-      "relation": "calls"
-    }
-  ]
-}
-```
-
-Then run:
-
-```bash
-graphify merge-graphs \
-  ./checkout-service/graphify-out/graph.json \
-  ./payment-service/graphify-out/graph.json \
-  --bridges ./e2e-bridges.json
-```
-
-Missing or ambiguous explicit endpoints fail instead of guessing. After the
-merge, `/graphify <question>` must query the root graph rather than rebuild a
-single service.
+Use a merged graph when the user asks for cross-service scope or supplies that graph. Its graph.graphify_merged metadata describes merged provenance; it is not a reason to override a requested single-repository analysis. Do not fetch or publish private source without authorization.

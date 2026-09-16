@@ -458,3 +458,16 @@ def sanitize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, object]:
             continue
         result[clean_key] = _sanitize_metadata_value(value)
     return result
+
+
+def sanitize_ast_metadata(value):
+    """Escape JSON-shaped AST evidence without silently truncating call sites."""
+    if isinstance(value, str):
+        return html.escape(_CONTROL_CHAR_RE.sub("", value), quote=True)
+    if isinstance(value, dict):
+        return {sanitize_ast_metadata(str(k)): sanitize_ast_metadata(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [sanitize_ast_metadata(item) for item in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return sanitize_ast_metadata(str(value))

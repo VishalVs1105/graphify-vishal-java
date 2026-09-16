@@ -1,287 +1,177 @@
-# Graphify for Java Backend Services
+# Graphify Java — AST evidence and API documentation
 
-Graphify builds persistent architecture graphs from Java backend repositories.
-It extracts Java types, methods, imports, references, inheritance, annotations,
-and calls locally with tree-sitter, then exposes the graph to GitHub Copilot,
-Codex, Claude, Gemini, and other coding agents.
+Graphify Java reads Java backend source and builds a persistent, source-linked graph. Its primary output is a reviewable API reference in Markdown: HTTP mappings, request/response contracts, flow diagrams, method calls, conditions, outcomes, and unresolved boundaries.
 
-This distribution indexes `.java` files only. There is no language-selection
-flag, semantic document pipeline, or non-Java parser dependency.
+This is the Java-focused fork of Graphify. The distribution is named **graphifyy**; the executable is **graphify**. Install from this fork to avoid accidentally running the upstream package.
 
-## Install
+## Priorities and guarantees
 
-```bash
-uv tool install graphifyy
+1. Preserve Java syntax evidence and resolve call targets conservatively.
+2. Generate accurate, auditable single-service API documentation.
+3. Let Copilot or another agent choose the explanation style.
+4. Keep multi-service merging as an optional, lower-priority capability.
+
+This is **static analysis, not a Java compiler or runtime tracer**. It cannot guarantee 100% call coverage, exact Spring bean selection, complete JSON serialization schemas, or business meaning. An unresolved invocation is reported as a gap, not as proof that execution stops. An inferred edge is not verified runtime behavior.
+
+## Installation
+
+Prerequisites: Python 3.10+, Git, and uv. Java/Maven/Gradle are not required to parse sources; application dependencies are not executed.
+
+For this development branch:
+
+```powershell
+uv tool uninstall graphifyy
+uv tool install --force --from "git+https://github.com/VishalVs1105/graphify-vishal-java.git@codex/java-api-docs-accuracy" graphifyy
+graphify --version
 ```
 
-Install the agent integration you use:
+The uninstall step is only needed if a previous uv tool installation exists. If the old install used pip or pipx, remove it through that same environment/manager instead. On Windows, `Get-Command graphify -All` shows which executable is active. Do not install the upstream PyPI package over this fork.
 
-```bash
-graphify copilot install       # GitHub Copilot CLI
-graphify vscode install        # VS Code Copilot Chat
-graphify codex install         # Codex
-graphify claude install        # Claude Code
-graphify gemini install        # Gemini CLI
+For local development:
+
+```powershell
+git clone --branch codex/java-api-docs-accuracy https://github.com/VishalVs1105/graphify-vishal-java.git
+cd graphify-vishal-java
+uv venv
+uv pip install -e .
+uv pip install pytest hypothesis ruff build
 ```
 
-## One Java service
+Activate the environment or prefix commands with `uv run`. For reproducible team installs, replace the branch reference with the tested commit SHA.
 
-```bash
-graphify extract ./checkout-service
-graphify cluster-only ./checkout-service
+## Quick start: one enterprise service
+
+Run from the parent directory containing your service:
+
+```powershell
+graphify extract .\repoA --no-cluster
+graphify api-docs --graph .\repoA\graphify-out\graph.json --output .\api-docs\repoA --strict
+graphify query "Explain the complete flow of GET /orders in repoA" --graph .\repoA\graphify-out\graph.json --budget 60000
 ```
 
-Outputs are written under `checkout-service/graphify-out/`:
+Use the real HTTP route in your service. Extraction automatically ignores non-Java inputs; there is no --java-only flag. The recommended extraction, query, update, and API-doc generation workflow needs **no LLM key**. Omitting --no-cluster can enter the optional backend/clustering workflow and request credentials.
 
-- `graph.json` — machine-readable architecture graph
-- `graph.html` — interactive visualization
-- `GRAPH_REPORT.md` — architecture summary, hubs, communities, and gaps
+Generate a single endpoint:
 
-Incremental maintenance stays Java-only:
-
-```bash
-graphify update ./checkout-service
-graphify watch ./checkout-service
+```powershell
+graphify api-docs --graph .\repoA\graphify-out\graph.json --output .\api-docs\orders --endpoint "POST /orders" --strict
 ```
 
-## Multiple Java microservices
+After source changes:
 
-Extract each service independently, then merge from their common parent:
-
-```bash
-graphify extract ./checkout-service
-graphify extract ./payment-service
-
-graphify merge-graphs \
-  ./checkout-service/graphify-out/graph.json \
-  ./payment-service/graphify-out/graph.json
-
-graphify cluster-only .
+```powershell
+graphify update .\repoA
+graphify api-docs --graph .\repoA\graphify-out\graph.json --output .\api-docs\repoA --strict --force
 ```
 
-`merge-graphs` writes the combined graph to the standard root location:
+After a parser upgrade, use a **full extraction**, not only an incremental update, to replace old extraction evidence:
 
-```text
-./graphify-out/graph.json
+```powershell
+graphify extract .\repoA --no-cluster --force
 ```
 
-That location matters: installed coding-agent skills check it first. Later
-architecture questions query the merged graph instead of rebuilding or reading
-only one service.
+`extract --out DIR` writes to **DIR/graphify-out/graph.json**. In contrast, `api-docs --output DIR` writes documents directly into **DIR**. Always pass --graph when working with several repositories.
 
-### Automatic service boundaries
+## What the API document contains
 
-Graphify extracts Spring and Feign HTTP mappings from Java type and method
-annotations. During merge it connects a unique outbound repository/client
-method to the controller handler with the same HTTP verb and normalized route.
-For example, `GET /catalog/addons/{externalId}` matches
-`GET /catalog/addons/{id}`. This works for enterprise interfaces such as
-`BizCatalogRepository` without a manual bridge.
+- Document control: endpoint owner, declaration location, graph SHA-256, schema version, and review status.
+- Request parameters: binding, declared Java type, explicit validation/default/requiredness evidence.
+- Response return type and recorded fields of matching request/response types.
+- Mermaid flow diagrams with numbered call edges.
+- Call-site tables with arguments, conditions, source locations, and evidence classifications.
+- Reachable method signatures, recorded decisions, return/throw expressions.
+- Unresolved invocation audit, syntax/read diagnostics, and limitations.
 
-If an annotation path is hidden behind a Java constant, merge falls back to an
-exact, unique method-name match between the outbound repository/client and a
-controller in another service. Generic or ambiguous method names are never
-guessed. The API-flow query then continues from that controller through service
-interfaces, implementations, repositories, and gateways until the recorded
-call chain ends. When one endpoint orchestrates multiple downstream services,
-the query keeps the shared controller/service prefix once and renders every
-cross-service call as a first-class E2E path in Java call-site order. Route
-terms select matching conditional handlers (for example, an addons route
-prefers `getAddonEntries`), while exception, unrelated handler, configuration,
-DTO/constructor, and mapper/helper noise is omitted or collapsed. After handler
-selection, repository/gateway calls outrank local helpers so the rendered path
-ends at the recorded data or external boundary instead of a response model.
-When a repository method performs multiple operations, each direct call is
-shown in Java source order and traversal continues through the operation with
-downstream evidence. Installed agent skills use deterministic Java-flow stdout
-as an evidence checklist, then require Copilot to produce a readable
-architectural walkthrough covering every hop, service path, and terminal rather
-than echoing the command output. They invoke flow queries with `--budget 60000`;
-traversal correctness is kept
-separate from output-size limiting, so the default CLI budget cannot turn an
-intermediate eighth hop into a false terminal.
+Open the Markdown in a Mermaid-capable viewer, such as a repository viewer or an editor with Mermaid support. Large flows are split into multiple diagrams, preserving the listed edges. The tables are the detailed reference; diagrams are not sequence diagrams.
 
-When route metadata is unavailable, Graphify also connects a unique outbound
-`*Client` type to a same-stem `*Controller` type in another repository:
+`--strict` rejects recorded parse/read diagnostics; it **does not certify complete target resolution**. Without it, documents retain diagnostic warnings. Existing generated filenames are protected unless --force is supplied. Regeneration does not delete unrelated or obsolete Markdown files; the new index lists the currently selected endpoints.
 
-```text
-checkout-service
-CheckoutController → OrderService → PaymentClient
-                                         │
-                                         ▼
-payment-service
-PaymentController → PaymentProcessor → StripeGateway
-```
-
-An annotation-matched network-hop edge contains:
-
-```json
-{
-  "relation": "calls",
-  "confidence": "INFERRED",
-  "confidence_score": 0.95,
-  "cross_service": true,
-  "bridge_strategy": "java_http_route",
-  "http_method": "GET",
-  "http_route": "/catalog/addons/{}"
-}
-```
-
-The naming fallback edge contains:
-
-```json
-{
-  "relation": "calls",
-  "confidence": "INFERRED",
-  "confidence_score": 0.9,
-  "cross_service": true,
-  "bridge_strategy": "java_client_controller_name"
-}
-```
-
-Graphify adds an automatic edge only when the controller handler or naming
-fallback is unique. It does not guess when multiple services expose the same
-HTTP route or controller name.
-
-For nonstandard naming, an optional explicit bridge remains available:
-
-```json
-{
-  "bridges": [
-    {
-      "source_repo": "checkout-service",
-      "source": "BillingAdapter",
-      "target_repo": "payment-service",
-      "target": "PaymentEndpoint",
-      "relation": "calls"
-    }
-  ]
-}
-```
-
-```bash
-graphify merge-graphs \
-  ./checkout-service/graphify-out/graph.json \
-  ./payment-service/graphify-out/graph.json \
-  --bridges ./e2e-bridges.json
-```
+See the [generated sample](docs/example-api/index.md).
 
 ## GitHub Copilot and other agents
 
-After installing the integration, build both service graphs in one request:
+Install the bundled integration for your host:
+
+```powershell
+graphify copilot install
+graphify vscode install
+```
+
+Use copilot for Copilot CLI, vscode for the repository's VS Code integration. Install only the host you use; restart/reload its session to pick up changed skills.
+
+Example chat requests:
 
 ```text
-/graphify ./checkout-service ./payment-service
+/graphify .
+/graphify api-docs
+/graphify query Explain POST /orders and its failure conditions
 ```
 
-Then ask questions against the merged graph:
+For API documentation, ask the agent to run the api-docs command against the chosen graph. It may then explain the reference in the style you need. **There are no developer/BSA modes or --audience options.** The extraction and graph evidence do not depend on the intended audience.
 
-```text
-/graphify query How does CheckoutController reach StripeGateway?
-/graphify path CheckoutController StripeGateway
-/graphify explain PaymentProcessor
+The agent is instructed to preserve important downstream branches, identify uncertainty, and avoid inventing business rules. The skill cannot guarantee an external model's compliance. Compare its answer to the generated evidence when auditing accuracy.
+
+Other retained integrations include Claude, Codex, generic Agent Skills, Aider, and additional existing installers. Use `graphify --help` for the available host names. Refresh the installed skill after upgrading the package.
+
+## Command guide
+
+| Command | Purpose |
+| --- | --- |
+| extract SERVICE --no-cluster | Parse Java files and persist local AST evidence |
+| update SERVICE | Refresh changed-source graph evidence without LLM extraction |
+| api-docs --graph GRAPH --output DIR | Generate endpoint Markdown reference and Mermaid diagrams |
+| query QUESTION --graph GRAPH | Retrieve a graph-grounded answer/evidence inventory |
+| path SOURCE TARGET --graph GRAPH | Find a graph path; not proof of runtime execution |
+| explain SYMBOL --graph GRAPH | Inspect a particular type/method |
+| affected SYMBOL --graph GRAPH | Inspect structural impact |
+| cluster-only PATH | Optional community analysis of an existing graph |
+| export --format graphml | Export using the retained export workflow |
+| serve | Optional MCP graph query interface |
+| merge-graphs GRAPH1 GRAPH2 ... | Optional multi-service merge and inferred bridges |
+
+Existing report, visualization, database, watch, and integration infrastructure remains for compatibility. It is not required for the primary Java API-doc workflow. Use command help/global help for optional flags; do not assume every legacy command accepts --graph.
+
+## Optional multi-service analysis
+
+First validate the individual service graphs. Then use merge-graphs as before and explicitly select the resulting graph when querying. Repository identities separate same-named classes. Existing route and method-name bridge inference remains available, but **has not been upgraded to compiler/runtime-verified service linkage** in this release.
+
+API docs traverse cross-service calls already stored in the selected graph; generation itself does not fabricate network edges. Missing remote linkage must remain a documented gap.
+
+## Accuracy and troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| No LLM key found | Use extract --no-cluster for the local AST workflow |
+| Graph file not found | Pass the absolute --graph path; check extract --out nesting |
+| Old behavior after upgrade | Check active executable, regenerate graphs, reinstall host skill, restart chat |
+| No matching endpoint | Check route spelling/constants, production-source inclusion, selected graph |
+| Missing method target | Inspect unresolved calls, imports/types, overloads, generated/external code |
+| Large query output | Generate api-docs; do not ask the model to read all of graph.json |
+| Strict documentation fails | Fix parsing/read errors, fully re-extract, retry |
+| Missing remote service | Validate individual graphs first; review optional inferred bridge evidence |
+
+See [accuracy and review](docs/ACCURACY.md) for a repeatable validation process and known limits.
+The [validation record](docs/VALIDATION.md) lists the checks performed on this release.
+
+## Architecture and contributing
+
+Read [the code-level technical guide](docs/TECHNICAL_GUIDE.md) for extraction stages, node/edge fields, call resolution, predicates, persistence, query traversal, document rendering, and extension points.
+
+Read [cleanup and migration notes](docs/CLEANUP.md) for what was removed and retained.
+
+```powershell
+python -m pytest -q
+python -m ruff check graphify tests tools
+python -m tools.skillgen --check
+python -m build
 ```
 
-The graph-first agent workflow runs `graphify query`, `graphify path`, or
-`graphify explain` against the existing root `graphify-out/graph.json`. These
-explicit commands are graph-only: the agent prefers a graph marked
-`graph.graphify_merged: true`, passes its absolute path to the CLI, and does not
-fall back to reading Java files. `/graphify query` by itself is incomplete; add
-the architecture question after `query`.
+Edit agent instructions under tools/skillgen/fragments, then run `python -m tools.skillgen` and `python -m tools.skillgen --bless`. Do not hand-edit generated skill copies.
 
-API and method flow questions are route-aware and method-directed:
+The focused API tests include extraction through the actual public CLI, graph round-tripping, deterministic document generation, recursion, same-name types, wrong arity, varargs, short-circuit conditions, ternary outcomes, and evidence larger than the old 50-item cap.
 
-```text
-/graphify query Explain the complete flow of POST /payments/charge in payment-service
-/graphify query Explain the flow of PaymentProcessor.process in payment-service
-```
+## Security and licensing
 
-Choose the audience explicitly when needed:
+The recommended workflow reads source locally, does not compile/run the Java application, and does not send source to an LLM. Optional remote backends and agent providers have their own data handling policies. Graphs and documents can expose internal architecture, identifiers, and source literals: treat them as sensitive and review before publication. HTML/Markdown escaping is not secret redaction.
 
-```bash
-# Developer view: Java call inventory, conditions, DTO request/response types,
-# method contracts, returns, throws, and cross-service E2E paths.
-graphify query \
-  "Explain POST /payments/charge in payment-service" \
-  --audience developer --budget 60000
-
-# BSA view: request meaning, business steps, rules, service interactions and
-# outcomes, without Java call chains or DTO names/types.
-graphify query \
-  "Explain POST /payments/charge in payment-service" \
-  --audience bsa --budget 60000
-```
-
-The audience can also be inferred from wording such as "for a BSA" or
-"business analyst", but `--audience` is recommended for automation. Enhanced
-graphs retain formal parameter names/types and HTTP bindings, return types,
-`if`/`else`, switch, loop, ternary and catch decisions, conditional return/throw
-outcomes, and the condition attached to each call site. Repeated calls to the
-same method are retained as separate call-site evidence on one graph edge.
-The Java extractor also retains terminating guard-clause predicates, invocation
-arguments, Bean Validation constraints, method references, inherited members,
-and calls through chained receivers. Query traversal propagates literal/enum
-arguments and removes statically impossible switch branches consistently from
-the curated E2E path and the complete call inventory.
-
-Graphify maps the exact Spring/Feign route to its controller method, shows the
-incoming cross-service bridge, and follows directed method calls downstream.
-When the same route or method exists in multiple services it returns an explicit
-ambiguity list instead of selecting one by score.
-
-## Useful commands
-
-```bash
-graphify extract <service>
-graphify update <service>
-graphify cluster-only <path>
-graphify merge-graphs <graph1.json> <graph2.json>
-graphify query "<architecture question>"
-graphify path "<source type>" "<target type>"
-graphify explain "<type or method>"
-graphify affected "<type or method>"
-graphify export --format graphml
-graphify serve
-```
-
-## Java extraction guarantees
-
-- Only `.java` files enter the extraction corpus.
-- Cross-file type references use packages and imports for disambiguation.
-- Receiver-typed member calls resolve only when the target is unique.
-- Java overloads are stored as signature-qualified nodes and resolved by
-  receiver plus argument arity when the full compiler type is unavailable.
-- Repeated call sites are aggregated without losing their individual source
-  locations or branch conditions.
-- Method metadata includes declared request parameters, HTTP bindings, return
-  and response types, decisions, returns, and throws.
-- Ambiguous calls and service boundaries are skipped instead of guessed.
-- Every relationship carries provenance and confidence metadata.
-- Merged node IDs are repository-qualified, preventing cross-service collisions.
-
-These are static-analysis guarantees, not a promise of 100% runtime coverage.
-Reflection, generated code, framework proxies, dynamic URLs, AOP, runtime bean
-selection and asynchronous infrastructure can require additional resolvers,
-contracts or runtime trace correlation.
-
-## Development
-
-```bash
-uv sync --frozen
-uv run pytest \
-  tests/test_java_member_calls.py \
-  tests/test_java_type_resolution.py \
-  tests/test_java_only_cli.py \
-  tests/test_merge_graphs_cli.py
-uv run python -m tools.skillgen --check
-```
-
-After changing runtime code, refresh this repository's graph:
-
-```bash
-graphify update .
-```
-
-## License
-
-Apache-2.0. See `LICENSE`, `LICENSE-MIT`, and `NOTICE`.
+Derived from Graphify. Existing Apache-2.0/MIT notices and third-party attribution are retained; see LICENSE, LICENSE-MIT, and NOTICE.

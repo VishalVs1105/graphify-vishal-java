@@ -133,7 +133,6 @@ def test_developer_flow_includes_contracts_conditions_and_complete_call_inventor
         graph,
         "Explain the complete developer flow of POST /orders/{id} in order-service",
         token_budget=60_000,
-        audience="developer",
     )
     assert output.startswith("JAVA API FLOW")
     assert "Endpoint request/response contract:" in output
@@ -150,27 +149,6 @@ def test_developer_flow_includes_contracts_conditions_and_complete_call_inventor
     assert "request.isPriority()" in output
 
 
-def test_bsa_flow_translates_rules_without_java_chain_or_dto_types(tmp_path: Path):
-    graph = _business_graph(tmp_path)
-    output = _query_graph_text(
-        graph,
-        "Explain the BSA business flow of POST /orders/{id} in order-service",
-        token_budget=60_000,
-        audience="bsa",
-    )
-    assert output.startswith("BUSINESS API FLOW")
-    assert "Business request:" in output
-    assert "Id is a required URL path value" in output
-    assert "Request is a required request body information and validated" in output
-    assert "Business rules and decision points:" in output
-    assert "request is priority" in output.casefold()
-    assert "request has inventory" in output.casefold()
-    assert "Business response and outcomes:" in output
-    assert "observed Java call(s)" in output
-    assert "OrderRequest" not in output
-    assert "OrderResponse" not in output
-    assert "OrderController" not in output
-    assert "OrderService.process" not in output
 
 
 def test_java_overloads_are_preserved_and_resolved_by_argument_arity(tmp_path: Path):
@@ -289,7 +267,7 @@ def test_java_validation_annotations_become_request_rules(tmp_path: Path):
     assert [value["name"] for value in limit["constraints"]] == ["Min", "Max"]
 
 
-def test_constant_arguments_prune_infeasible_switch_api_calls(tmp_path: Path):
+def test_constant_arguments_are_evidence_not_a_reason_to_delete_switch_alternatives(tmp_path: Path):
     source = tmp_path / "CatalogFlow.java"
     source.write_text(
         """
@@ -346,43 +324,19 @@ def test_constant_arguments_prune_infeasible_switch_api_calls(tmp_path: Path):
         graph,
         "Explain the complete developer flow of GET /addons in catalog-service",
         token_budget=60_000,
-        audience="developer",
     )
     inventory = output.split("Complete reachable production call inventory:", 1)[1]
     assert "RemoteClient.loadAddon()" in inventory
-    assert "RemoteClient.loadDevice()" not in inventory
-    assert "resolved as (ResourceType.ADDON) is ADDON" in inventory
+    assert "RemoteClient.loadDevice()" in inventory
+    assert "Arguments: ResourceType.ADDON" in inventory
     assert "infeasible" not in output.casefold()
 
     business = _query_graph_text(
         graph,
         "Explain the BSA flow of GET /addons in catalog-service",
         token_budget=60_000,
-        audience="bsa",
     )
-    assert "load addon" in business.casefold()
-    assert "load device" not in business.casefold()
-    assert "resource type.addon" in business.casefold()
-    assert "unsupported" not in business.casefold()
-
-
-def test_query_cli_accepts_explicit_bsa_audience(monkeypatch, tmp_path: Path, capsys):
-    graph = _business_graph(tmp_path)
-    graph_path = tmp_path / "business-graph.json"
-    graph_path.write_text(
-        json.dumps(json_graph.node_link_data(graph, edges="links")),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(mainmod, "_check_skill_version", lambda _cmd: None)
-    monkeypatch.setattr(mainmod.sys, "argv", [
-        "graphify", "query",
-        "Explain POST /orders/{id} in order-service",
-        "--audience", "bsa",
-        "--budget", "60000",
-        "--graph", str(graph_path),
-    ])
-    mainmod.main()
-    output = capsys.readouterr().out
-    assert output.startswith("BUSINESS API FLOW")
-    assert "Business rules and decision points:" in output
-    assert "OrderRequest" not in output
+    assert "loadAddon" in business
+    assert "loadDevice" in business
+    assert "ResourceType.ADDON" in business
+    assert "unsupported" in business.casefold()

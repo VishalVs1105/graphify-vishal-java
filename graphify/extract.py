@@ -19,7 +19,7 @@ from graphify.extractors.resolution import (
     _resolve_cross_file_java_imports,
     _resolve_java_type_references,
 )
-from graphify.security import sanitize_metadata
+from graphify.security import sanitize_ast_metadata as sanitize_metadata
 
 
 def _import_java(
@@ -58,33 +58,41 @@ def _import_java(
             pieces[-2] if len(pieces) > 1 else path_str
         )
         if module_name:
-            edges.append({
-                "source": file_nid,
-                "target": _make_id(module_name),
-                "relation": "imports",
-                "context": "import",
-                "confidence": "EXTRACTED",
-                "source_file": str_path,
-                "source_location": f"L{node.start_point[0] + 1}",
-                "weight": 1.0,
-            })
+            edges.append(
+                {
+                    "source": file_nid,
+                    "target": _make_id(module_name),
+                    "relation": "imports",
+                    "context": "import",
+                    "confidence": "EXTRACTED",
+                    "source_file": str_path,
+                    "source_location": f"L{node.start_point[0] + 1}",
+                    "weight": 1.0,
+                }
+            )
         break
 
 
 _JAVA_CONFIG = LanguageConfig(
     ts_module="tree_sitter_java",
-    class_types=frozenset({
-        "class_declaration",
-        "interface_declaration",
-        "record_declaration",
-        "enum_declaration",
-        "annotation_type_declaration",
-    }),
+    class_types=frozenset(
+        {
+            "class_declaration",
+            "interface_declaration",
+            "record_declaration",
+            "enum_declaration",
+            "annotation_type_declaration",
+        }
+    ),
     function_types=frozenset({"method_declaration", "constructor_declaration"}),
     import_types=frozenset({"import_declaration"}),
-    call_types=frozenset({
-        "method_invocation", "object_creation_expression", "method_reference",
-    }),
+    call_types=frozenset(
+        {
+            "method_invocation",
+            "object_creation_expression",
+            "method_reference",
+        }
+    ),
     call_function_field="name",
     call_accessor_node_types=frozenset(),
     function_boundary_types=frozenset({"method_declaration", "constructor_declaration"}),
@@ -153,9 +161,10 @@ def _canonicalize_java_ids(
                 continue
             if node_id == old_prefix:
                 remap[node_id] = new_prefix
+                break
             elif node_id.startswith(old_prefix + "_"):
-                remap[node_id] = new_prefix + node_id[len(old_prefix):]
-            break
+                remap[node_id] = new_prefix + node_id[len(old_prefix) :]
+                break
 
     for node in nodes:
         node_id = node.get("id")
@@ -201,10 +210,11 @@ def _rewire_unique_java_stubs(nodes: list[dict], edges: list[dict]) -> None:
             edge["source"] = remap[str(edge["source"])]
         if edge.get("target") in remap:
             edge["target"] = remap[str(edge["target"])]
-    referenced = {endpoint for edge in edges for endpoint in (edge.get("source"), edge.get("target"))}
+    referenced = {
+        endpoint for edge in edges for endpoint in (edge.get("source"), edge.get("target"))
+    }
     nodes[:] = [
-        node for node in nodes
-        if node.get("id") not in remap or node.get("id") in referenced
+        node for node in nodes if node.get("id") not in remap or node.get("id") in referenced
     ]
 
 
@@ -218,9 +228,7 @@ def _resolve_java_member_calls(
     def key(label: object) -> str:
         return str(label or "").strip().removeprefix(".").removesuffix("()")
 
-    contained = {
-        edge.get("target") for edge in all_edges if edge.get("relation") == "contains"
-    }
+    contained = {edge.get("target") for edge in all_edges if edge.get("relation") == "contains"}
     node_by_id = {node.get("id"): node for node in all_nodes}
     type_defs: dict[str, list[str]] = {}
     for node in all_nodes:
@@ -265,16 +273,23 @@ def _resolve_java_member_calls(
                 visited.add(owner)
                 level_methods.update(method_index.get((owner, key(callee)), set()))
                 next_frontier.extend(parents.get(owner, []))
-            if argument_count is not None and len(level_methods) > 1:
+            if argument_count is not None:
                 arity_matches = {
                     method_id
                     for method_id in level_methods
                     if isinstance(node_by_id.get(method_id, {}).get("metadata"), dict)
-                    and node_by_id[method_id]["metadata"].get("java_parameter_count")
-                    == argument_count
+                    and (
+                        node_by_id[method_id]["metadata"].get("java_parameter_count")
+                        == argument_count
+                        or (
+                            node_by_id[method_id]["metadata"].get("java_varargs")
+                            and isinstance(argument_count, int)
+                            and argument_count
+                            >= node_by_id[method_id]["metadata"].get("java_parameter_count", 1) - 1
+                        )
+                    )
                 }
-                if arity_matches:
-                    level_methods = arity_matches
+                level_methods = arity_matches
             if len(level_methods) == 1:
                 return next(iter(level_methods))
             if len(level_methods) > 1:
@@ -290,7 +305,17 @@ def _resolve_java_member_calls(
         raw = re.sub(r"^@[A-Za-z_$][\w$]*(?:\([^)]*\))?\s*", "", raw)
         raw = raw.removesuffix("...").removesuffix("[]").strip()
         base = raw.split("<", 1)[0].strip().rsplit(".", 1)[-1]
-        if not base or base in {"void", "boolean", "byte", "short", "int", "long", "float", "double", "char"}:
+        if not base or base in {
+            "void",
+            "boolean",
+            "byte",
+            "short",
+            "int",
+            "long",
+            "float",
+            "double",
+            "char",
+        }:
             return None
         return base
 
@@ -310,8 +335,35 @@ def _resolve_java_member_calls(
             frontier.extend(parents.get(owner, []))
         return None
 
-    def unique_type(type_name: object) -> str | None:
-        candidates = type_defs.get(key(type_name), []) if type_name else []
+    def unique_type(type_name: object, caller: str) -> str | None:
+        name = key(type_name)
+        candidates = type_defs.get(name.rsplit(".", 1)[-1], []) if name else []
+        if "." in name:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if f"{(node_by_id[candidate].get('metadata') or {}).get('namespace', '')}."
+                f"{key(node_by_id[candidate].get('label'))}" == name
+            ]
+        if len(candidates) > 1:
+            source_file = node_by_id.get(caller, {}).get("source_file")
+            imported = {
+                str(edge.get("target"))
+                for edge in all_edges
+                if edge.get("relation") == "imports" and edge.get("source_file") == source_file
+            }
+            matches = [candidate for candidate in candidates if candidate in imported]
+            if len(matches) == 1:
+                return matches[0]
+            owner = enclosing_type.get(caller, "")
+            namespace = (node_by_id.get(owner, {}).get("metadata") or {}).get("namespace")
+            matches = [
+                candidate
+                for candidate in candidates
+                if (node_by_id[candidate].get("metadata") or {}).get("namespace") == namespace
+            ]
+            if namespace and len(matches) == 1:
+                return matches[0]
         return candidates[0] if len(candidates) == 1 else None
 
     for result in per_file:
@@ -333,13 +385,10 @@ def _resolve_java_member_calls(
                 type_name = raw_call.get("receiver_type")
                 if not type_name and receiver.startswith("this."):
                     caller_type = enclosing_type.get(caller)
-                    type_name = (
-                        inherited_field_type(caller_type, receiver)
-                        if caller_type else None
-                    )
+                    type_name = inherited_field_type(caller_type, receiver) if caller_type else None
                 if not type_name and receiver[:1].isupper():
                     type_name = receiver
-                type_id = unique_type(type_name)
+                type_id = unique_type(type_name, caller)
                 if type_id is None:
                     continue
                 exact = True
@@ -360,7 +409,7 @@ def _resolve_java_member_calls(
                         chain_failed = True
                         break
                     return_type = declared_return_type(intermediate)
-                    next_type = unique_type(return_type)
+                    next_type = unique_type(return_type, intermediate)
                     if next_type is None:
                         chain_failed = True
                         break
@@ -372,8 +421,6 @@ def _resolve_java_member_calls(
             target = select_method(type_id, callee, argument_count)
             if target is None:
                 continue
-            if target == caller:
-                continue
             method_reference = raw_call.get("call_kind") == "method_reference"
             edge = {
                 "source": caller,
@@ -384,6 +431,7 @@ def _resolve_java_member_calls(
                 "confidence_score": 1.0 if exact and not method_reference else 0.8,
                 "source_file": raw_call.get("source_file", ""),
                 "source_location": raw_call.get("source_location"),
+                "source_column": raw_call.get("source_column"),
                 "weight": 1.0,
             }
             if raw_call.get("conditions"):
@@ -458,6 +506,7 @@ def _attach_java_unresolved_calls(nodes: list[dict], raw_calls: list[dict]) -> N
             "source_file": raw_call.get("source_file") or "",
             "source_location": raw_call.get("source_location"),
             "call_kind": raw_call.get("call_kind") or "method",
+            "source_column": raw_call.get("source_column"),
         }
         if raw_call.get("argument_count") is not None:
             item["argument_count"] = raw_call["argument_count"]
@@ -493,6 +542,7 @@ def _aggregate_java_call_edges(edges: list[dict]) -> list[dict]:
         item: dict[str, object] = {
             "source_file": edge.get("source_file", ""),
             "source_location": edge.get("source_location"),
+            "source_column": edge.get("source_column"),
         }
         if edge.get("conditions"):
             item["conditions"] = [dict(value) for value in edge["conditions"]]
@@ -531,11 +581,13 @@ def _aggregate_java_call_edges(edges: list[dict]) -> list[dict]:
     for edge in output:
         if edge.get("relation") != "calls":
             continue
-        bounded = sanitize_metadata({
-            "conditions": edge.get("conditions") or [],
-            "call_sites": edge.get("call_sites") or [],
-            "arguments": edge.get("arguments") or [],
-        })
+        bounded = sanitize_metadata(
+            {
+                "conditions": edge.get("conditions") or [],
+                "call_sites": edge.get("call_sites") or [],
+                "arguments": edge.get("arguments") or [],
+            }
+        )
         if bounded["conditions"]:
             edge["conditions"] = bounded["conditions"]
         else:
@@ -557,7 +609,9 @@ def _deduplicate(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list
     seen: set[str] = set()
     unique_edges: list[dict] = []
     for edge in edges:
-        if not edge.get("source") or not edge.get("target") or edge["source"] == edge["target"]:
+        if not edge.get("source") or not edge.get("target"):
+            continue
+        if edge["source"] == edge["target"] and edge.get("relation") != "calls":
             continue
         identity = json.dumps(edge, sort_keys=True, default=str)
         if identity not in seen:
@@ -587,7 +641,21 @@ def extract(
         corpus_root = Path(".").resolve()
 
     per_file = [extract_java(path) for path in java_paths]
+    diagnostics = [
+        {"source_file": _relative_source(path, corpus_root), "message": result["error"]}
+        for path, result in zip(java_paths, per_file)
+        if result.get("error")
+    ]
     all_nodes = [node for result in per_file for node in result.get("nodes", [])]
+    diagnostics.extend(
+        {
+            "source_file": _relative_source(Path(node["source_file"]), corpus_root),
+            "message": "Java syntax recovery",
+            "details": node["metadata"]["java_parse_errors"],
+        }
+        for node in all_nodes
+        if node.get("metadata", {}).get("java_parse_errors")
+    )
     all_edges = [edge for result in per_file for edge in result.get("edges", [])]
     raw_calls = [call for result in per_file for call in result.get("raw_calls", [])]
 
@@ -611,6 +679,8 @@ def extract(
         "edges": all_edges,
         "input_tokens": 0,
         "output_tokens": 0,
+        "diagnostics": diagnostics,
+        "complete": not diagnostics,
     }
 
 

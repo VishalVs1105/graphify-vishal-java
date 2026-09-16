@@ -1158,6 +1158,12 @@ def _rebuild_code(
             "nodes": [], "edges": [], "hyperedges": [],
             "input_tokens": 0, "output_tokens": 0,
         }
+        if result.get("complete") is False:
+            print("[graphify update] Java extraction incomplete; preserving the existing graph. "
+                  "Fix the reported source errors and retry.", file=sys.stderr)
+            for diagnostic in result.get("diagnostics", []):
+                print(f"  {diagnostic}", file=sys.stderr)
+            return False
         _rebase_relative_source_files(result, watch_root, project_root)
 
         # Preserve semantic nodes/edges from a previous full run.

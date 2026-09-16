@@ -712,6 +712,10 @@ def _reenter_main() -> None:
 
 
 def dispatch_command(cmd: str) -> None:
+    if cmd == "api-docs":
+        from graphify.api_docs import main as api_docs_main
+        api_docs_main(sys.argv[2:])
+        return
     if cmd == "provider":
         from graphify.llm import _custom_providers_path, BACKENDS
         import json as _json
@@ -851,7 +855,7 @@ def dispatch_command(cmd: str) -> None:
             sys.exit(1)
     elif cmd == "query":
         if len(sys.argv) < 3:
-            print("Usage: graphify query \"<question>\" [--audience developer|bsa] [--dfs] [--context C] [--budget N] [--graph path]", file=sys.stderr)
+            print("Usage: graphify query \"<question>\" [--dfs] [--context C] [--budget N] [--graph path]", file=sys.stderr)
             sys.exit(1)
         from graphify.serve import _query_graph_text
         from graphify.security import sanitize_label
@@ -862,7 +866,6 @@ def dispatch_command(cmd: str) -> None:
         use_dfs = "--dfs" in sys.argv
         budget = 2000
         graph_path = _default_graph_path()
-        audience: str | None = None
         context_filters: list[str] = []
         args = sys.argv[3:]
         i = 0
@@ -891,16 +894,13 @@ def dispatch_command(cmd: str) -> None:
                 graph_path = args[i + 1]
                 i += 2
             elif args[i] == "--audience" and i + 1 < len(args):
-                audience = args[i + 1].strip().casefold()
-                i += 2
+                print("error: --audience was removed; let your agent choose the explanation style", file=sys.stderr)
+                sys.exit(2)
             elif args[i].startswith("--audience="):
-                audience = args[i].split("=", 1)[1].strip().casefold()
-                i += 1
+                print("error: --audience was removed; let your agent choose the explanation style", file=sys.stderr)
+                sys.exit(2)
             else:
                 i += 1
-        if audience not in {None, "developer", "bsa"}:
-            print("error: --audience must be developer or bsa", file=sys.stderr)
-            sys.exit(1)
         gp = Path(graph_path).resolve()
         if not gp.exists():
             print(f"error: graph file not found: {gp}", file=sys.stderr)
@@ -966,7 +966,6 @@ def dispatch_command(cmd: str) -> None:
             depth=2,
             token_budget=budget,
             context_filters=context_filters,
-            audience=audience,
         )
         querylog.log_query(
             kind="query",
@@ -3208,10 +3207,20 @@ def dispatch_command(cmd: str) -> None:
             print(f"[graphify extract] AST extraction on {len(code_files)} code files...")
             try:
                 ast_result = _ast_extract(code_files, **ast_kwargs)
+                if ast_result.get("complete") is False:
+                    _extraction_incomplete = True
+                    for diagnostic in ast_result.get("diagnostics", []):
+                        print(f"[graphify extract] {diagnostic}", file=sys.stderr)
+                    if not cli_allow_partial:
+                        print("error: Java extraction failed; use --allow-partial only to retain diagnostic output", file=sys.stderr)
+                        sys.exit(1)
             except Exception as exc:
                 print(f"[graphify extract] AST extraction failed: {exc}", file=sys.stderr)
-                ast_result = {"nodes": [], "edges": [], "input_tokens": 0, "output_tokens": 0}
+                ast_result = {"nodes": [], "edges": [], "input_tokens": 0, "output_tokens": 0,
+                              "diagnostics": [{"message": str(exc), "source_file": str(target)}]}
                 _extraction_incomplete = True  # the whole AST pass was lost
+                if not cli_allow_partial:
+                    sys.exit(1)
         stages.mark("AST extract")
 
         # Semantic extraction on docs/papers/images. Check cache first.
@@ -3564,6 +3573,9 @@ def dispatch_command(cmd: str) -> None:
             _backup(graphify_out)
             _invalidate_file_manifest_for_db_graph()
             from graphify.paths import write_json_atomic as _write_json_atomic
+            merged["directed"] = True
+            merged["multigraph"] = True
+            merged.setdefault("graph", {})["java_extraction_diagnostics"] = ast_result.get("diagnostics", [])
             _write_json_atomic(graph_json_path, merged, indent=2)
             try:
                 # Record the scan root so a later build_merge / update runbook can
@@ -3639,7 +3651,8 @@ def dispatch_command(cmd: str) -> None:
                 root=target,
             )
         else:
-            G = _build([merged], dedup=True, dedup_llm_backend=dedup_backend, root=target)
+            G = _build([merged], directed=True, dedup=True, dedup_llm_backend=dedup_backend, root=target)
+        G.graph["java_extraction_diagnostics"] = ast_result.get("diagnostics", [])
         stages.mark("build")
         if G.number_of_nodes() == 0:
             print(

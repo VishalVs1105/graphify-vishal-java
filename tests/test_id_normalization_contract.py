@@ -91,12 +91,9 @@ def test_both_callers_share_one_implementation():
     assert _normalize_id is normalize_id
     # extract._make_id wraps make_id; prove it round-trips through the shared core.
     assert _make_id("Foo.Bar") == normalize_id("Foo.Bar")
-    # The other two live ID producers — MCP config ingestion and bash symbol
-    # resolution — must also resolve to the shared recipe, or the "single source
-    # of truth" leaks back into copy-pasted forks (#1378).
+    # MCP config ingestion also uses the shared identity recipe.
     from graphify.mcp_ingest import _make_id as _mcp_make_id
-    from graphify.symbol_resolution import _bash_make_id
-    for fn in (_make_id, _mcp_make_id, _bash_make_id):
+    for fn in (_make_id, _mcp_make_id):
         assert fn("Foo.Bar", "baz") == make_id("Foo.Bar", "baz")
         assert fn("Ångström", "Ⅳ") == make_id("Ångström", "Ⅳ")
 

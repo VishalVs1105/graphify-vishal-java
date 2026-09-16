@@ -5,52 +5,6 @@ from pathlib import Path
 
 from graphify.ids import make_id
 
-# Language built-in globals that AST may classify as call targets when used as
-# constructors or coercion functions (e.g. String(x), Number(x), Boolean(x)).
-# Without this filter they become god-nodes accumulating spurious edges from
-# every call site. Filter applied at same-file and cross-file resolution.
-# See issue #726.
-_LANGUAGE_BUILTIN_GLOBALS: frozenset[str] = frozenset({
-    # JavaScript / TypeScript ECMAScript built-ins
-    "String", "Number", "Boolean", "Object", "Array", "Symbol", "BigInt",
-    "Date", "RegExp", "Error", "TypeError", "RangeError", "SyntaxError",
-    "ReferenceError", "EvalError", "URIError",
-    "Promise", "Map", "Set", "WeakMap", "WeakSet", "JSON", "Math",
-    "Reflect", "Proxy", "Intl",
-    "parseInt", "parseFloat", "isNaN", "isFinite",
-    "encodeURIComponent", "decodeURIComponent", "encodeURI", "decodeURI",
-    # Browser / Node common globals
-    "URL", "URLSearchParams", "FormData", "Blob", "File",
-    "Headers", "Request", "Response", "AbortController", "AbortSignal",
-    "TextEncoder", "TextDecoder", "console",
-    # Python built-in callables
-    "str", "int", "float", "bool", "list", "dict", "set", "tuple", "bytes",
-    "len", "range", "enumerate", "zip", "map", "filter", "sum", "min", "max",
-    "print", "open", "isinstance", "type", "super", "sorted", "reversed",
-    "any", "all", "abs", "round", "next", "iter", "hash", "id", "repr",
-    "callable", "getattr", "setattr", "hasattr", "delattr", "vars", "dir",
-    # Swift standard library / Foundation / SwiftUI (#2147). Value-type
-    # initializers (Data(x), Int(x), UUID()) and protocol conformance targets
-    # appear from virtually every file of a Swift codebase, exactly like the
-    # ECMAScript constructors above. String/Date/URL/Error are already listed.
-    "Int", "Int8", "Int16", "Int32", "Int64",
-    "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
-    "Double", "Float", "Bool", "Character",
-    "Sendable", "Codable", "Decodable", "Encodable", "Equatable", "Hashable",
-    "Identifiable", "Comparable", "CaseIterable", "RawRepresentable",
-    "CustomStringConvertible", "CustomDebugStringConvertible", "AnyObject",
-    "LocalizedError",
-    "Data", "UUID", "Decimal", "Calendar", "Locale", "TimeZone", "Bundle",
-    "IndexPath", "IndexSet", "NotificationCenter", "UserDefaults",
-    "FileManager", "URLSession", "URLRequest", "URLComponents",
-    "JSONDecoder", "JSONEncoder", "DateFormatter", "NumberFormatter",
-    "ISO8601DateFormatter",
-    "NSObject", "NSString", "NSError", "NSLock", "NSAttributedString",
-    "DispatchQueue", "DispatchGroup", "OperationQueue", "RunLoop",
-    "View", "Color", "Font",
-})
-
-
 def _make_id(*parts: str) -> str:
     return make_id(*parts)
 
@@ -82,4 +36,4 @@ def _file_stem(path: Path) -> str:
 
 
 def _read_text(node, source: bytes) -> str:
-    return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")

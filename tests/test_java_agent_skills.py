@@ -1,53 +1,47 @@
-from __future__ import annotations
-
-import os
 from pathlib import Path
+import os
 from unittest.mock import patch
 
 import graphify.__main__ as mainmod
 from tools.skillgen import gen
 
 
-def test_generated_agent_skills_are_java_only_and_query_merged_graph():
+def test_generated_agent_skills_prioritize_java_api_docs():
     artifacts = gen.render_all(gen.load_platforms())
-    skill_bodies = [
-        artifact.content
-        for artifact in artifacts
-        if artifact.path.startswith("graphify/skill")
-        and "/references/" not in artifact.path
+    bodies = [
+        a.content
+        for a in artifacts
+        if a.path.startswith("graphify/skill") and "/references/" not in a.path
     ]
-
-    assert skill_bodies
-    for body in skill_bodies:
-        assert "Java" in body
-        assert "graphify merge-graphs" in body
-        assert "graphify query" in body
-        assert "/graphify query <architecture question>" in body
-        assert "graph.graphify_merged" in body
-        assert "--graph" in body
-        assert "Do not open, search, or infer from `.java`" in body
+    assert bodies
+    for body in bodies:
+        for required in (
+            "Java",
+            "graphify api-docs",
+            "graphify query",
+            "--graph",
+            "Merging services is optional",
+            "unresolved",
+            "no developer/BSA modes",
+        ):
+            assert required in body, required
+        assert "--audience" not in body
         assert "--java-only" not in body
+        assert "Do not automatically prefer a merged graph" in body
 
 
-def test_split_agent_bundles_keep_only_merge_and_query_references():
-    platforms = gen.load_platforms()
-    for platform in platforms.values():
-        if platform.bucket != "split":
-            continue
-        names = {
-            Path(artifact.path).name
-            for artifact in gen.render(platform)
-            if "/references/" in artifact.path
-        }
-        assert names == {"github-and-merge.md", "query.md"}
+def test_split_agent_bundles_keep_query_and_optional_merge_references():
+    for platform in gen.load_platforms().values():
+        if platform.bucket == "split":
+            names = {Path(a.path).name for a in gen.render(platform) if "/references/" in a.path}
+            assert names == {"github-and-merge.md", "query.md"}
 
 
 def test_skill_generator_has_no_drift():
-    artifacts = gen.render_all(gen.load_platforms())
-    assert gen.check(artifacts) == []
+    assert gen.check(gen.render_all(gen.load_platforms())) == []
 
 
-def test_copilot_install_contains_java_merge_workflow(tmp_path: Path):
+def test_copilot_install_contains_api_docs_workflow(tmp_path):
     old_cwd = Path.cwd()
     try:
         os.chdir(tmp_path)
@@ -55,32 +49,14 @@ def test_copilot_install_contains_java_merge_workflow(tmp_path: Path):
             mainmod.install(platform="copilot")
     finally:
         os.chdir(old_cwd)
-
     skill = tmp_path / ".copilot" / "skills" / "graphify" / "SKILL.md"
-    assert skill.exists()
     body = skill.read_text(encoding="utf-8")
-    assert "graphify merge-graphs" in body
-    assert "graphify query" in body
-    assert "/graphify query <architecture question>" in body
-    assert "graph.graphify_merged" in body
-    assert "Do not open, search, or infer from `.java`" in body
-    assert "paste the CLI output as the answer" in body
-    assert "mandatory readable" in body
-    assert "explanation with: endpoint mapping" in body
-    assert 'graphify query "<question>" --budget 60000 --graph' in body
-    refs = skill.parent / "references"
-    assert sorted(path.name for path in refs.iterdir()) == [
-        "github-and-merge.md",
-        "query.md",
-    ]
-    query_reference = (refs / "query.md").read_text(encoding="utf-8")
-    assert "stdout as the final answer. Translate" in query_reference
-    assert "clear architectural walkthrough" in query_reference
-    assert "Account for every numbered edge exactly once" in query_reference
-    assert "every terminal is represented" in query_reference
-    assert "omit the raw stdout block" in query_reference
-    assert "Downstream service call 1" in query_reference
-    assert "Always invoke `graphify query` with `--budget 60000`" in query_reference
+    assert "graphify api-docs" in body
+    assert "no developer/BSA modes" in body
+    assert "Do not automatically prefer a merged graph" in body
+    query = (skill.parent / "references" / "query.md").read_text(encoding="utf-8")
+    assert "--strict" in query
+    assert "Never invent" in query
 
 
 def test_generic_agent_alias_is_preserved():

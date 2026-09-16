@@ -1,110 +1,25 @@
 @@FRONTMATTER@@
 
-# /graphify
+# Graphify — Java API evidence
 
-Use Graphify to build and query deterministic knowledge graphs for Java backend
-services. Non-Java files are ignored automatically.
-
-## Usage
-
-```text
-/graphify
-/graphify <java-service>
-/graphify <service1> <service2> [service3 ...]
-/graphify <question about the existing graph>
-/graphify query <architecture question>
-/graphify path <source type> <target type>
-/graphify explain <type or method>
-```
-
-## Explicit graph commands
-
-Treat `/graphify query`, `/graphify path`, and `/graphify explain` as strict
-graph-only requests:
-
-1. Require the question or operands shown above. If they are missing, ask for
-   them and do not inspect source files.
-2. Locate `graphify-out/graph.json` from the workspace root and its parent
-   workspace directories. When more than one graph exists, prefer the graph
-   whose JSON metadata has `graph.graphify_merged` set to `true`.
-3. Pass that graph explicitly with `--graph "<absolute-path>"`. For `query`,
-   always pass `--budget 60000` so complete multi-service Java flows are not
-   shortened by the normal interactive output budget.
-4. Answer only from command output. Do not open, search, or infer from `.java`
-   files. If the graph lacks the answer, report insufficient graph evidence and
-   recommend rebuilding or re-merging it.
-5. If command output starts with `JAVA API FLOW` or `JAVA METHOD FLOW`, do not
-   paste the CLI output as the answer. Convert it into a mandatory readable
-   explanation with: endpoint mapping, shared orchestration, one subsection for
-   every E2E service call, response mapping, terminals, and evidence caveats.
-   Account for every numbered graph edge exactly once, preserve service order,
-   source locations, `EXTRACTED`/`INFERRED` status, and the meaning of every
-   terminal. Never omit a hop or invent evidence that is absent from stdout.
-6. Select the audience explicitly when the user identifies it. Use
-   `--audience developer` for code-level flow, request/response DTO contracts,
-   conditions, and the complete reachable call inventory. Use `--audience bsa`
-   for business rules, request meaning, service interactions, and outcomes
-   without Java class chains or DTO names/types. If output starts with
-   `BUSINESS API FLOW`, preserve every business rule and alternative outcome,
-   but translate only at business level.
+Use Graphify for Java backend extraction, API documentation, and graph-grounded questions. Prioritize accurate single-repository evidence. Merging services is optional, not a prerequisite.
 
 ## Workflow
 
-1. If `graphify-out/graph.json` exists and the user asked an architecture or
-   codebase question, do not rebuild. Run:
+- `/graphify .` or `/graphify <service>`: run `graphify extract "<service>" --no-cluster`. Java is the default; no LLM key is needed.
+- `/graphify update <service>`: run `graphify update "<service>"`.
+- `/graphify api-docs`: run `graphify api-docs --graph "<graph.json>" --output "<docs-directory>"`. Add `--endpoint "GET /path"` and `--service "<name>"` when requested. Only add `--force` with overwrite intent.
+- `/graphify query <architecture question>`: run `graphify query "<question>" --budget 60000 --graph "<graph.json>"`.
+- `/graphify merge <graphs>`: only when requested, run `graphify merge-graphs <graphs...>`; consult the optional merge reference if installed.
 
-   ```bash
-   graphify query "<question>" --budget 60000 --graph "<absolute-path-to-merged-graph.json>"
-   ```
+## Evidence and presentation
 
-   Answer only from the returned graph evidence. Say when the graph does not
-   contain enough information.
+Resolve the graph for the requested repository. Use an explicitly supplied graph first; otherwise locate the project's graphify-out/graph.json. If several graphs could answer the question, ask which scope is intended. Do not automatically prefer a merged graph over a requested single-service graph.
 
-2. For one Java service, build its graph:
+Use the CLI, not a full-file read of a potentially huge graph.json. Inspect small metadata or query output when needed. If evidence is absent or stale, say so and offer re-extraction; do not silently invent missing service hops. Source inspection is appropriate for an explicitly requested accuracy audit or debugging; distinguish source findings from persisted graph evidence.
 
-   ```bash
-   graphify extract <service>
-   graphify cluster-only <service>
-   ```
+Choose a clear explanation suited to the user's question. There are no developer/BSA modes or fixed narration templates. Distinguish extracted syntax, inferred targets, unresolved calls, and conditional alternatives. Preserve downstream services and important branches in a complete-flow explanation. Do not present a static inventory as runtime order, concurrency, or a guaranteed execution trace. Do not claim 100% accuracy.
 
-3. For multiple Java services, build each graph, then merge them into the
-   standard root graph:
+For reviewable API documents, use `graphify api-docs` rather than reconstructing an API contract from method names. You may add a clearly labelled narrative grounded in its evidence. An unresolved call is not proof that the application stops there.
 
-   ```bash
-   graphify extract <service1>
-   graphify extract <service2>
-   graphify merge-graphs \
-     <service1>/graphify-out/graph.json \
-     <service2>/graphify-out/graph.json
-   graphify cluster-only .
-   ```
-
-   `merge-graphs` writes `graphify-out/graph.json` by default. It first matches
-   unique outbound repository/client methods to controller handlers by HTTP
-   verb and normalized Spring/Feign route. It also links an unambiguous Java
-   `*Client` to a same-stem `*Controller`, such as
-   `PaymentClient -> PaymentController`.
-
-4. If automatic linking cannot identify a unique endpoint, use an explicit
-   bridge contract as described in `references/github-and-merge.md`.
-
-5. After graph creation, use `graphify query`, `graphify path`, or
-   `graphify explain`, always with `--graph` pointing at the merged root graph.
-   Subsequent `/graphify` questions must use that merged graph instead of
-   rebuilding or reading individual services.
-
-## GitHub repositories
-
-For GitHub URLs and multi-repository details, load
-`references/github-and-merge.md`.
-
-## Querying
-
-For query, path, and explain behavior, load `references/query.md`.
-
-## Rules
-
-- Java is the only extraction mode; invoke commands without a language flag.
-- Do not infer missing cross-service edges when names are ambiguous.
-- Preserve edge direction and report source locations when available.
-- Run `graphify update .` after modifying Java code when a graph already exists.
+If sidecar references are installed, consult query.md for query/document details and github-and-merge.md only for optional multi-service work.

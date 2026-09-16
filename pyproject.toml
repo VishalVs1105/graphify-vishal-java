@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "graphifyy"
-version = "0.9.47"
-description = "Java backend knowledge graphs for AI coding assistants and multi-service architecture analysis"
+version = "0.10.0"
+description = "Java AST evidence and reviewable API documentation for AI coding assistants"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "LICENSE-MIT", "NOTICE"]
@@ -20,9 +20,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Graphify-Labs/graphify"
-Repository = "https://github.com/Graphify-Labs/graphify"
-Issues = "https://github.com/Graphify-Labs/graphify/issues"
+Homepage = "https://github.com/VishalVs1105/graphify-vishal-java"
+Repository = "https://github.com/VishalVs1105/graphify-vishal-java"
+Issues = "https://github.com/VishalVs1105/graphify-vishal-java/issues"
 
 [project.optional-dependencies]
 # starlette is pulled in transitively by mcp, but graphify/serve.py imports it
