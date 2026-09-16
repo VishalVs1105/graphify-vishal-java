@@ -1,5 +1,13 @@
 # Validation record — 0.10.0
 
+## 0.10.1 follow-up: no default output budget
+
+Removed default CLI/internal/MCP query output caps and hardcoded agent budget arguments. Explicitly requested caps remain compatible. API-document generation was already uncapped.
+
+Validation: 1,825 tests passed, 17 skipped; lint, package build, generated-skill drift check and skill-frontmatter validation passed. Large-output regressions preserve more than the former 60,000-token-equivalent character limit. Optional MCP HTTP runtime tests are skipped in this environment because its MCP dependency is unavailable; those paths are not counted as runtime-verified.
+
+## Original 0.10.0 validation
+
 Validated locally on Windows, 2026-09-16, on codex/java-api-docs-accuracy.
 
 | Check | Result |

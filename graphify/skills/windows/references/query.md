@@ -1,7 +1,7 @@
 # Java queries and API documentation
 
 ```bash
-graphify query "Explain GET /orders" --budget 60000 --graph ./service/graphify-out/graph.json
+graphify query "Explain GET /orders" --graph ./service/graphify-out/graph.json
 graphify api-docs --graph ./service/graphify-out/graph.json --output ./api-docs --endpoint "GET /orders"
 ```
 

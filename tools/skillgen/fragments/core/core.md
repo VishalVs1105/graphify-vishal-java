@@ -9,10 +9,12 @@ Use Graphify for Java backend extraction, API documentation, and graph-grounded 
 - `/graphify .` or `/graphify <service>`: run `graphify extract "<service>" --no-cluster`. Java is the default; no LLM key is needed.
 - `/graphify update <service>`: run `graphify update "<service>"`.
 - `/graphify api-docs`: run `graphify api-docs --graph "<graph.json>" --output "<docs-directory>"`. Add `--endpoint "GET /path"` and `--service "<name>"` when requested. Only add `--force` with overwrite intent.
-- `/graphify query <architecture question>`: run `graphify query "<question>" --budget 60000 --graph "<graph.json>"`.
+- `/graphify query <architecture question>`: run `graphify query "<question>" --graph "<graph.json>"`.
 - `/graphify merge <graphs>`: only when requested, run `graphify merge-graphs <graphs...>`; consult the optional merge reference if installed.
 
 ## Evidence and presentation
+
+Query output and API documents have no default budget. Do not add a budget unless the user explicitly requests a limit.
 
 Resolve the graph for the requested repository. Use an explicitly supplied graph first; otherwise locate the project's graphify-out/graph.json. If several graphs could answer the question, ask which scope is intended. Do not automatically prefer a merged graph over a requested single-service graph.
 

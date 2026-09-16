@@ -940,13 +940,13 @@ def _dfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], lis
     return visited, edges_seen
 
 
-def _subgraph_to_text(G: nx.Graph, nodes: set[str], edges: list[tuple], token_budget: int = 2000, *, seeds: list[str] | None = None) -> str:
-    """Render subgraph as text, cutting at token_budget (approx 3 chars/token).
+def _subgraph_to_text(G: nx.Graph, nodes: set[str], edges: list[tuple], token_budget: int | None = None, *, seeds: list[str] | None = None) -> str:
+    """Render text without a cap unless token_budget is explicitly supplied.
 
     seeds: exact-match nodes rendered first before the degree-sorted expansion,
     so the queried symbol always appears at the top of the output.
     """
-    char_budget = token_budget * 3
+    char_budget = token_budget * 3 if token_budget is not None else None
     lines = []
     # Work-memory overlay (derived sidecar) stashed on the graph at load time.
     # Empty when no sidecar exists, so un-annotated output stays byte-identical.
@@ -1039,7 +1039,7 @@ def _subgraph_to_text(G: nx.Graph, nodes: set[str], edges: list[tuple], token_bu
             )
             lines.append(line)
     output = "\n".join(lines)
-    if len(output) > char_budget:
+    if char_budget is not None and len(output) > char_budget:
         cut_at = output[:char_budget].rfind("\n")
         cut_at = cut_at if cut_at > 0 else char_budget
         # Never cut the seed nodes: they render first, so if the budget lands
@@ -1069,11 +1069,11 @@ def _subgraph_to_text(G: nx.Graph, nodes: set[str], edges: list[tuple], token_bu
     return output
 
 
-def _cut_lines_to_budget(lines: list[str], token_budget: int, narrow_hint: str) -> str:
-    """Render pre-built lines under the same ~3-chars/token budget rule as
-    _subgraph_to_text; over-budget output is cut at a line boundary with a count and a
-    narrowing hint instead of flooding the caller's context window."""
+def _cut_lines_to_budget(lines: list[str], token_budget: int | None, narrow_hint: str) -> str:
+    """Render every line by default; apply a cap only when explicitly requested."""
     output = "\n".join(lines)
+    if token_budget is None:
+        return output
     char_budget = token_budget * 3
     if len(output) <= char_budget:
         return output
@@ -1590,7 +1590,7 @@ def _render_java_call_flow(
     title: str,
     mapping: str | None,
     question: str,
-    token_budget: int,
+    token_budget: int | None,
 ) -> str:
     records = list(_true_edge_records(G))
     owners = _java_method_owners(G, records)
@@ -2179,7 +2179,7 @@ def _java_flow_ambiguity(
 def _try_java_flow_query(
     G: nx.Graph,
     question: str,
-    token_budget: int,
+    token_budget: int | None,
 ) -> str | None:
     """Return a deterministic Java route/method flow for explicit flow questions."""
     if not _JAVA_FLOW_INTENT_RE.search(question):
@@ -2287,7 +2287,7 @@ def _query_graph_text(
     *,
     mode: str = "bfs",
     depth: int = 3,
-    token_budget: int = 2000,
+    token_budget: int | None = None,
     context_filters: list[str] | None = None,
 ) -> str:
     java_flow = _try_java_flow_query(
@@ -2564,7 +2564,7 @@ def _build_server(graph_path: str):
                         "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs",
                                  "description": "bfs=broad context, dfs=trace a specific path"},
                         "depth": {"type": "integer", "default": 3, "description": "Traversal depth (1-6)"},
-                        "token_budget": {"type": "integer", "default": 2000, "description": "Max output tokens"},
+                        "token_budget": {"type": "integer", "description": "Optional output cap; omitted means no limit"},
                         "context_filter": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -2591,7 +2591,7 @@ def _build_server(graph_path: str):
                     "properties": {
                         "label": {"type": "string"},
                         "relation_filter": {"type": "string", "description": "Optional: filter by relation type"},
-                        "token_budget": {"type": "integer", "default": 2000, "description": "Max output tokens"},
+                        "token_budget": {"type": "integer", "description": "Optional output cap; omitted means no limit"},
                     },
                     "required": ["label"],
                 },
@@ -2603,7 +2603,7 @@ def _build_server(graph_path: str):
                     "type": "object",
                     "properties": {
                         "community_id": {"type": "integer", "description": "Community ID (0-indexed by size)"},
-                        "token_budget": {"type": "integer", "default": 2000, "description": "Max output tokens"},
+                        "token_budget": {"type": "integer", "description": "Optional output cap; omitted means no limit"},
                     },
                     "required": ["community_id"],
                 },
@@ -2704,7 +2704,7 @@ def _build_server(graph_path: str):
         question = arguments["question"]
         mode = arguments.get("mode", "bfs")
         depth = min(int(arguments.get("depth", 3)), 6)
-        budget = int(arguments.get("token_budget", 2000))
+        budget = int(arguments["token_budget"]) if arguments.get("token_budget") is not None else None
         context_filter = arguments.get("context_filter")
         _t0 = _time.perf_counter()
         result = _query_graph_text(
@@ -2788,7 +2788,7 @@ def _build_server(graph_path: str):
                 f"  <-- {sanitize_label(G.nodes[nb].get('label', nb))} "
                 f"[{sanitize_label(str(rel))}] [{sanitize_label(str(d.get('confidence', '')))}]{_edge_at(d)}"
             )
-        budget = int(arguments.get("token_budget", 2000))
+        budget = int(arguments["token_budget"]) if arguments.get("token_budget") is not None else None
         return _cut_lines_to_budget(
             lines, budget, "Narrow with relation_filter or use get_node for a specific symbol"
         )
@@ -2807,7 +2807,7 @@ def _build_server(graph_path: str):
                 f"  {sanitize_label(d.get('label', n))} "
                 f"[{sanitize_label(str(d.get('source_file', '')))}]"
             )
-        budget = int(arguments.get("token_budget", 2000))
+        budget = int(arguments["token_budget"]) if arguments.get("token_budget") is not None else None
         return _cut_lines_to_budget(
             lines, budget, "Raise token_budget or use get_node for specific members"
         )

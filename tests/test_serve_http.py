@@ -212,6 +212,30 @@ def test_project_path_is_optional_on_every_tool(tmp_path):
             props = tool["inputSchema"].get("properties", {})
             assert "project_path" in props, f"{tool['name']} missing project_path"
             assert "project_path" not in tool["inputSchema"].get("required", [])
+            if "token_budget" in props:
+                assert "default" not in props["token_budget"]
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("query_graph", {"question": "Root"}),
+    ("get_neighbors", {"label": "Root"}),
+    ("get_community", {"community_id": 0}),
+])
+def test_mcp_output_has_no_default_budget(tmp_path, tool, args):
+    nodes = [{"id": "root", "label": "Root", "community": 0}]
+    nodes += [{"id": str(i), "label": f"Related{i}_" + "evidence" * 9,
+               "community": 0, "source_file": "Service.java"} for i in range(200)]
+    graph = {"directed": True, "nodes": nodes, "edges": [
+        {"source": "root", "target": str(i), "relation": "calls"} for i in range(200)
+    ]}
+    path = tmp_path / "large.json"
+    path.write_text(json.dumps(graph), encoding="utf-8")
+    app = serve_mod._build_http_app(str(path), json_response=True)
+    with _client(app) as client:
+        headers = _init_session(client)
+        output = _call_tool(client, headers, tool, args, rid=2)
+        assert len(output) > 6000
+        assert "TRUNCATED" not in output
 
 
 def test_project_path_routes_to_that_projects_graph(tmp_path):

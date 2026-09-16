@@ -1,5 +1,7 @@
 # Graphify Java — AST evidence and API documentation
 
+Queries and API documentation have no default output budget. You do not need to pass a budget or ask Copilot to increase one. An explicit query cap remains optional for compatibility; external agent context limits are separate from Graphify.
+
 Graphify Java reads Java backend source and builds a persistent, source-linked graph. Its primary output is a reviewable API reference in Markdown: HTTP mappings, request/response contracts, flow diagrams, method calls, conditions, outcomes, and unresolved boundaries.
 
 This is the Java-focused fork of Graphify. The distribution is named **graphifyy**; the executable is **graphify**. Install from this fork to avoid accidentally running the upstream package.
@@ -46,7 +48,7 @@ Run from the parent directory containing your service:
 ```powershell
 graphify extract .\repoA --no-cluster
 graphify api-docs --graph .\repoA\graphify-out\graph.json --output .\api-docs\repoA --strict
-graphify query "Explain the complete flow of GET /orders in repoA" --graph .\repoA\graphify-out\graph.json --budget 60000
+graphify query "Explain the complete flow of GET /orders in repoA" --graph .\repoA\graphify-out\graph.json
 ```
 
 Use the real HTTP route in your service. Extraction automatically ignores non-Java inputs; there is no --java-only flag. The recommended extraction, query, update, and API-doc generation workflow needs **no LLM key**. Omitting --no-cluster can enter the optional backend/clustering workflow and request credentials.

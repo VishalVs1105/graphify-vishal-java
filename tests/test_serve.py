@@ -1365,6 +1365,23 @@ def test_cut_lines_to_budget_under_budget_is_byte_identical():
     assert "TRUNCATED" not in out and "truncated" not in out
 
 
+def test_line_output_without_budget_retains_more_than_old_60000_token_cap():
+    lines = [f"Line {index}: " + "evidence " * 25 for index in range(1000)]
+    output = _cut_lines_to_budget(lines, token_budget=None, narrow_hint="")
+    assert len(output) > 180000
+    assert output == "\n".join(lines)
+
+
+def test_subgraph_output_is_uncapped_by_default():
+    graph = nx.Graph()
+    for index in range(1600):
+        graph.add_node(str(index), label=f"Symbol{index}", source_file="a" * 130 + ".java")
+    output = _subgraph_to_text(graph, set(graph), [])
+    assert len(output) > 180000
+    assert output.count("NODE ") == len(graph)
+    assert "TRUNCATED" not in output
+
+
 def test_cut_lines_to_budget_over_budget_announces_at_top():
     lines = [f"  --> node{i} [calls] [EXTRACTED]" for i in range(200)]
     out = _cut_lines_to_budget(lines, token_budget=20, narrow_hint="use get_node for a specific symbol")

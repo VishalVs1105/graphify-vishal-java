@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "graphifyy"
-version = "0.10.0"
+version = "0.10.1"
 description = "Java AST evidence and reviewable API documentation for AI coding assistants"
 readme = "README.md"
 license = "Apache-2.0"
