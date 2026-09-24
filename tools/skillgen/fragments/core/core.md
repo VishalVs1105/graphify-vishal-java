@@ -1,16 +1,18 @@
 @@FRONTMATTER@@
 
-# Graphify — Java API evidence
+# Repo Analyzer — Java API evidence
+
+The agent skill is `repo-analyzer`; terminal commands remain `graphify` and graphs remain in `graphify-out/`.
 
 Use Graphify for Java backend extraction, API documentation, and graph-grounded questions. Prioritize accurate single-repository evidence. Merging services is optional, not a prerequisite.
 
 ## Workflow
 
-- `/graphify .` or `/graphify <service>`: run `graphify extract "<service>" --no-cluster`. Java is the default; no LLM key is needed.
-- `/graphify update <service>`: run `graphify update "<service>"`.
-- `/graphify api-docs`: run `graphify api-docs --graph "<graph.json>" --output "<docs-directory>"`. Add `--endpoint "GET /path"` and `--service "<name>"` when requested. Only add `--force` with overwrite intent.
-- `/graphify query <architecture question>`: run `graphify query "<question>" --graph "<graph.json>"`.
-- `/graphify merge <graphs>`: only when requested, run `graphify merge-graphs <graphs...>`; consult the optional merge reference if installed.
+- `/repo-analyzer .` or `/repo-analyzer <service>`: run `graphify extract "<service>" --no-cluster`. Java is the default; no LLM key is needed.
+- `/repo-analyzer update <service>`: run `graphify update "<service>"`.
+- `/repo-analyzer api-docs`: run `graphify api-docs --graph "<graph.json>" --output "<docs-directory>"`. Add `--endpoint "GET /path"` and `--service "<name>"` when requested. Only add `--force` with overwrite intent.
+- `/repo-analyzer query <architecture question>`: run `graphify query "<question>" --graph "<graph.json>"`.
+- `/repo-analyzer merge <graphs>`: only when requested, run `graphify merge-graphs <graphs...>`; consult the optional merge reference if installed.
 
 ## Evidence and presentation
 

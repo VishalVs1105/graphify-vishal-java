@@ -336,7 +336,7 @@ def validate_graph_path(path: str | Path, base: Path | None = None) -> Path:
     if not base.exists():
         raise ValueError(
             f"Graph base directory does not exist: {base}. "
-            "Run /graphify first to build the graph."
+            "Run /repo-analyzer first to build the graph."
         )
 
     resolved = Path(path).resolve()

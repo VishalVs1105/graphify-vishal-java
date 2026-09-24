@@ -29,8 +29,8 @@ PLATFORMS = [
 
 
 def _plant_skill_tree(root: Path, dot_dir: str) -> Path:
-    """Create <root>/<dot_dir>/skills/graphify/{SKILL.md, references/x.md, .graphify_version}."""
-    skill_dir = root / dot_dir / "skills" / "graphify"
+    """Create <root>/<dot_dir>/skills/repo-analyzer/{SKILL.md, references/x.md, .graphify_version}."""
+    skill_dir = root / dot_dir / "skills" / "repo-analyzer"
     (skill_dir / "references").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# graphify skill\n", encoding="utf-8")
     (skill_dir / "references" / "x.md").write_text("ref\n", encoding="utf-8")

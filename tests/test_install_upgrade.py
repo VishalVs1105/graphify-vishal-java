@@ -250,7 +250,7 @@ def test_kiro_install_ships_references_sidecar_and_version_stamp(tmp_path, monke
 
     mainmod._kiro_install(tmp_path)
 
-    skill_dir = tmp_path / ".kiro" / "skills" / "graphify"
+    skill_dir = tmp_path / ".kiro" / "skills" / "repo-analyzer"
 
     # SKILL.md present
     assert (skill_dir / "SKILL.md").exists()

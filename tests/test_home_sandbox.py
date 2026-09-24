@@ -46,7 +46,7 @@ def test_global_uninstall_is_captured_by_sandbox(tmp_path, tmp_path_factory):
     an explicit `remove_user_skill=True`. Both scopes are exercised here so the
     sandbox (#2168) is still proven to capture the global delete.
     """
-    skill = Path.home() / ".claude" / "skills" / "graphify" / "SKILL.md"
+    skill = Path.home() / ".claude" / "skills" / "repo-analyzer" / "SKILL.md"
     skill.parent.mkdir(parents=True)
     skill.write_text("# graphify skill (sandbox copy)\n", encoding="utf-8")
 

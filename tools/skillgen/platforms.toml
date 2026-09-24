@@ -16,7 +16,7 @@
 #   core          core template basename under fragments/core/ (split only).
 #   skill_dst     rendered SKILL.md path, relative to the repo root.
 #   refs_dst      rendered references/ dir, relative to the repo root (split only).
-#   name          frontmatter name (default "graphify"; must equal the install folder name).
+#   name          frontmatter name (default "repo-analyzer"; must equal the install folder name).
 #   description   frontmatter description, PRESERVED VERBATIM per platform. Required.
 #   dispatch      Part-B dispatch fragment basename under fragments/dispatch/.
 #   extraction    verbose | compact. Selects the extraction-spec reference body.
@@ -58,11 +58,11 @@ bucket = "split"
 core = "core"
 skill_dst = "graphify/skill-windows.md"
 refs_dst = "graphify/skills/windows/references"
-# Must equal the install folder name (graphify). Claude Code requires the skill
+# Must equal the install folder name (repo-analyzer). Claude Code requires the skill
 # folder name to match the frontmatter `name`, and `graphify install` writes the
-# windows variant to ~/.claude/skills/graphify/SKILL.md — a `graphify-windows`
+# windows variant to ~/.claude/skills/repo-analyzer/SKILL.md — a `graphify-windows`
 # name broke discovery/validation (#1635). The variant is a packaging detail.
-name = "graphify"
+name = "repo-analyzer"
 description = "Extract Java backend API evidence, generate Markdown API documentation with diagrams, and answer graph-grounded codebase questions. Use for Java services and existing graphify-out graphs; multi-service merging is optional."
 dispatch = "agent-tool-disk-powershell"
 extraction = "verbose"

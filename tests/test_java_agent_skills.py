@@ -49,7 +49,7 @@ def test_copilot_install_contains_api_docs_workflow(tmp_path):
             mainmod.install(platform="copilot")
     finally:
         os.chdir(old_cwd)
-    skill = tmp_path / ".copilot" / "skills" / "graphify" / "SKILL.md"
+    skill = tmp_path / ".copilot" / "skills" / "repo-analyzer" / "SKILL.md"
     body = skill.read_text(encoding="utf-8")
     assert "graphify api-docs" in body
     assert "no developer/BSA modes" in body

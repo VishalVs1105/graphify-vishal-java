@@ -1,6 +1,6 @@
 # Graphify Java API Documentation — Architecture and Demo Guide
 
-This guide describes the implementation reviewed on `codex/java-api-docs-accuracy`, version **0.10.1**.
+This guide describes the Java API documentation implementation from `codex/java-api-docs-accuracy` (0.10.1), with the agent renamed on `codex/repo-analyzer-agent`. The chat command is `/repo-analyzer`; the CLI remains `graphify`.
 
 > Graphify reads Java source code and stores structured evidence in a graph. When someone requests API documentation, Graphify generates the reference from that graph, and Copilot invokes the tools and explains the results.
 
@@ -14,7 +14,7 @@ flowchart TD
     B --> C[Extract methods, calls, contracts and conditions]
     C --> D[Resolve cross-file references]
     D --> E[graphify-out/graph.json]
-    F[User asks Copilot for API documentation] --> G[Graphify skill instructions]
+    F[User asks Copilot for API documentation] --> G[Repo Analyzer skill instructions]
     G --> H[Copilot runs graphify api-docs]
     E --> H
     H --> I[Markdown reference and Mermaid diagrams]
@@ -115,10 +115,10 @@ For Copilot CLI, run:
 graphify copilot install
 ```
 
-This installs the Graphify skill and supporting references under:
+This installs the Repo Analyzer skill and supporting references under:
 
 ```text
-%USERPROFILE%\.copilot\skills\graphify\
+%USERPROFILE%\.copilot\skills\repo-analyzer\
 ```
 
 For the VS Code integration, use:
@@ -141,7 +141,7 @@ The repository's skill explicitly instructs the agent to:
 In Copilot, ask:
 
 ```text
-/graphify generate API documentation for GET /v1/remote/addons/details
+/repo-analyzer generate API documentation for GET /v1/remote/addons/details
 ```
 
 Copilot interprets that natural-language request using the skill and should invoke a command equivalent to:
@@ -152,7 +152,7 @@ graphify api-docs --graph graphify-out/graph.json --endpoint "GET /v1/remote/add
 
 Important distinctions:
 
-1. `api-docs` is a CLI command, not a separate skill. The Graphify skill tells Copilot to invoke it.
+1. `api-docs` is a CLI command, not a separate skill. The Repo Analyzer skill tells Copilot to invoke it.
 2. Copilot interprets the natural-language request; the CLI itself accepts the explicit `api-docs` command and its arguments.
 3. The skill is guidance, not a security restriction. It does not technically prevent Copilot from reading Java files.
 4. The `api-docs` generator itself reads the saved graph without reopening Java source.
@@ -209,7 +209,7 @@ Key functions for a technical walkthrough:
 
 ## 6. Demo workflow
 
-Run these commands from the Java service's root folder, using the installed package from the `codex/java-api-docs-accuracy` branch.
+Run these commands from the Java service's root folder, using the installed package from the `codex/repo-analyzer-agent` branch.
 
 ### Step 1: Check the installed version and refresh the skill
 
@@ -243,7 +243,7 @@ After an extractor upgrade, use a full re-extraction when you need newly support
 ### Step 3: Ask Copilot
 
 ```text
-/graphify generate API documentation for GET /v1/remote/addons/details
+/repo-analyzer generate API documentation for GET /v1/remote/addons/details
 ```
 
 No long prompt, audience flag or budget is necessary. Copilot can adapt its explanation to the question without a developer/BSA mode.
@@ -330,7 +330,7 @@ These are historical regression results, not a newly executed validation for thi
 
 ## 9. Suggested presentation summary
 
-> We have separated deterministic code evidence from AI explanation. Tree-sitter extracts Java structure, and our resolver connects available method references while retaining conditions, contracts and unresolved gaps. We persist that evidence in a graph. Copilot's Graphify skill invokes a graph-only documentation generator, which produces a traceable Markdown reference with Mermaid diagrams. Copilot can then explain it for the audience. We do not claim runtime or 100% accuracy; uncertainty remains visible and reviewable.
+> We have separated deterministic code evidence from AI explanation. Tree-sitter extracts Java structure, and our resolver connects available method references while retaining conditions, contracts and unresolved gaps. We persist that evidence in a graph. Copilot's Repo Analyzer skill invokes a graph-only documentation generator, which produces a traceable Markdown reference with Mermaid diagrams. Copilot can then explain it for the audience. We do not claim runtime or 100% accuracy; uncertainty remains visible and reviewable.
 
 ## Further reading
 

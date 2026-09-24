@@ -60,7 +60,7 @@ def _load_graph(graph_path: str) -> nx.Graph:
             G.graph["_learning_overlay"] = {}
         return G
     except json.JSONDecodeError as exc:
-        print(f"error: graph.json is corrupted ({exc}). Re-run /graphify to rebuild.", file=sys.stderr)
+        print(f"error: graph.json is corrupted ({exc}). Re-run /repo-analyzer to rebuild.", file=sys.stderr)
         sys.exit(1)
     except (ValueError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)

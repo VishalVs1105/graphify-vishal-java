@@ -19,4 +19,4 @@ do not automatically prefer merged scope. Generate reviewable Java API reference
 `graphify api-docs`. Let Copilot choose presentation style; distinguish recorded evidence
 from source audits and inference. Report missing graph evidence explicitly.
 
-Type `/graphify` in Copilot Chat to build or update the graph.
+Type `/repo-analyzer` in Copilot Chat to build or update the graph.

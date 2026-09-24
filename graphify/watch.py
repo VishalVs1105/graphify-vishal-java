@@ -1556,13 +1556,13 @@ def check_update(watch_path: Path) -> bool:
 
     Cron-safe: always returns True so cron jobs do not alarm.
     Non-code file changes (docs, papers, images) require LLM-backed
-    re-extraction via `/graphify --update` — this function only signals
+    re-extraction via `/repo-analyzer --update` — this function only signals
     that the update is needed.
     """
     flag = Path(watch_path) / _GRAPHIFY_OUT / "needs_update"
     if flag.exists():
         print(f"[graphify check-update] Pending non-code changes in {watch_path}.")
-        print("[graphify check-update] Run `/graphify --update` to apply semantic re-extraction.")
+        print("[graphify check-update] Run `/repo-analyzer --update` to apply semantic re-extraction.")
     return True
 
 
@@ -1573,7 +1573,7 @@ def _notify_only(watch_path: Path) -> None:
     flag.write_text("1", encoding="utf-8")
     print(f"\n[graphify watch] New or changed files detected in {watch_path}")
     print("[graphify watch] Non-code files changed - semantic re-extraction requires LLM.")
-    print("[graphify watch] Run `/graphify --update` in Claude Code to update the graph.")
+    print("[graphify watch] Run `/repo-analyzer --update` in Claude Code to update the graph.")
     print(f"[graphify watch] Flag written to {flag}")
 
 
@@ -1587,7 +1587,7 @@ def watch(watch_path: Path, debounce: float = 3.0) -> None:
 
     For code-only changes: re-runs AST extraction + rebuild immediately (no LLM).
     For doc/paper/image changes: writes a needs_update flag and notifies the user
-    to run /graphify --update (LLM extraction required).
+    to run /repo-analyzer --update (LLM extraction required).
 
     debounce: seconds to wait after the last change before triggering (avoids
     running on every keystroke when many files are saved at once).
@@ -1650,7 +1650,7 @@ def watch(watch_path: Path, debounce: float = 3.0) -> None:
 
     print(f"[graphify watch] Watching {watch_path.resolve()} - press Ctrl+C to stop")
     print(f"[graphify watch] Code changes rebuild graph automatically. "
-          f"Doc/image changes require /graphify --update.")
+          f"Doc/image changes require /repo-analyzer --update.")
     print(f"[graphify watch] Debounce: {debounce}s")
 
     try:

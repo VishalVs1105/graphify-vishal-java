@@ -131,14 +131,14 @@ def test_agents_section_does_not_skip_dirty_graph_output():
 def test_agents_section_uses_generic_graphify_instruction():
     assert "`skill` tool" not in _AGENTS_MD_SECTION
     assert 'skill: "graphify"' not in _AGENTS_MD_SECTION
-    assert "use the installed graphify skill" in _AGENTS_MD_SECTION
+    assert "use the installed repo-analyzer skill" in _AGENTS_MD_SECTION
 
 
 def test_skill_registration_uses_host_generic_instruction():
     reg = _skill_registration()
     assert 'skill: "graphify"' not in reg
     assert "Skill tool" not in reg
-    assert "use the installed graphify skill or instructions" in reg
+    assert "use the installed repo-analyzer skill or instructions" in reg
 
 
 def test_how_it_works_clarifies_code_only_semantic_extraction():

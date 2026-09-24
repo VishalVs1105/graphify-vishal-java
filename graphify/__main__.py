@@ -248,7 +248,7 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 # `graphify hook-guard` subcommand (see _run_hook_guard). The previous hooks
 # inlined POSIX bash (case/esac, [ -f ], single-quoted echo) which Windows
 # cmd.exe/PowerShell cannot parse, so on Windows the hook failed and the nudge
-# silently vanished — users had to invoke /graphify by hand (#522). Moving the
+# silently vanished — users had to invoke /repo-analyzer by hand (#522). Moving the
 # logic into a Python subcommand invoked via an absolute exe path makes the hook
 # parse identically under sh, cmd.exe and PowerShell. Claude Code accepts
 # additionalContext on PreToolUse (Codex Desktop does not — that path stays a
@@ -524,7 +524,7 @@ def _run_cli() -> None:
         print("                            (default follows JSON directed flag;")
         print("                             raw extraction with no flag defaults directed)")
         print("    --extract-path PATH     extractor source for suppression scan")
-        print("  clone <github-url>      clone a GitHub repo locally and print its path for /graphify")
+        print("  clone <github-url>      clone a GitHub repo locally and print its path for /repo-analyzer")
         print("  merge-driver <base> <current> <other>  git merge driver: union-merge two graph.json files (set up via hook install)")
         print("  merge-graphs <g1> <g2>  merge two or more graph.json files into one cross-repo graph")
         print("    --out <path>            output path (default: graphify-out/graph.json)")
@@ -680,17 +680,17 @@ def _run_cli() -> None:
             "  antigravity uninstall   remove .agents/rules, .agents/workflows, and skill"
         )
         print(
-            "  hermes install          write skill to ~/.hermes/skills/graphify/ (Hermes)"
+            "  hermes install          write skill to ~/.hermes/skills/repo-analyzer/ (Hermes)"
         )
-        print("  hermes uninstall        remove skill from ~/.hermes/skills/graphify/")
+        print("  hermes uninstall        remove skill from ~/.hermes/skills/repo-analyzer/")
         print(
-            "  kiro install            write skill to .kiro/skills/graphify/ + steering file (Kiro IDE/CLI)"
+            "  kiro install            write skill to .kiro/skills/repo-analyzer/ + steering file (Kiro IDE/CLI)"
         )
         print("  kiro uninstall          remove skill + steering file")
-        print("  pi install              write skill to ~/.pi/agent/skills/graphify/ (Pi coding agent)")
-        print("  pi uninstall            remove skill from ~/.pi/agent/skills/graphify/")
-        print("  devin install           write skill to ~/.config/devin/skills/graphify/ (Devin CLI)")
-        print("  devin uninstall         remove skill from ~/.config/devin/skills/graphify/")
+        print("  pi install              write skill to ~/.pi/agent/skills/repo-analyzer/ (Pi coding agent)")
+        print("  pi uninstall            remove skill from ~/.pi/agent/skills/repo-analyzer/")
+        print("  devin install           write skill to ~/.config/devin/skills/repo-analyzer/ (Devin CLI)")
+        print("  devin uninstall         remove skill from ~/.config/devin/skills/repo-analyzer/")
         print()
         return
 

@@ -17,7 +17,7 @@ import graphify.__main__ as mainmod
 
 
 def _make_skill(tmp_path: Path, stamped: str) -> Path:
-    skill_dst = tmp_path / "skills" / "graphify" / "SKILL.md"
+    skill_dst = tmp_path / "skills" / "repo-analyzer" / "SKILL.md"
     skill_dst.parent.mkdir(parents=True, exist_ok=True)
     skill_dst.write_text("# graphify skill\n", encoding="utf-8")
     (skill_dst.parent / ".graphify_version").write_text(stamped, encoding="utf-8")

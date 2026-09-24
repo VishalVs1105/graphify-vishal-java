@@ -1567,7 +1567,7 @@ def dispatch_command(cmd: str) -> None:
         try:
             saved = _ingest(url, target_dir, author=author, contributor=contributor)
             print(f"Saved to {saved}")
-            print("Run /graphify --update in your AI assistant to update the graph.")
+            print("Run /repo-analyzer --update in your AI assistant to update the graph.")
         except Exception as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -1650,7 +1650,7 @@ def dispatch_command(cmd: str) -> None:
         graph_json = graph_override if graph_override is not None else watch_path / _GRAPHIFY_OUT / "graph.json"
         if not graph_json.exists():
             print(
-                f"error: no graph found at {graph_json} — run /graphify first",
+                f"error: no graph found at {graph_json} — run /repo-analyzer first",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -1957,7 +1957,7 @@ def dispatch_command(cmd: str) -> None:
         # exiting silently when a hook-driven rebuild happens to be running.
         ok = _rebuild_code(watch_path, force=force, no_cluster=no_cluster, block_on_lock=True)
         if ok:
-            print("Code graph updated. For doc/paper/image changes run /graphify --update in your AI assistant.")
+            print("Code graph updated. For doc/paper/image changes run /repo-analyzer --update in your AI assistant.")
             if not (
                 os.environ.get("GEMINI_API_KEY")
                 or os.environ.get("GOOGLE_API_KEY")
@@ -2116,7 +2116,7 @@ def dispatch_command(cmd: str) -> None:
         args = sys.argv[2:]
         graph_paths: list[Path] = []
         # The normal graph location lets the graph-first agent fast path reuse
-        # the merged multi-service graph on the next /graphify invocation.
+        # the merged multi-service graph on the next /repo-analyzer invocation.
         out_path = Path(_GRAPHIFY_OUT) / "graph.json"
         bridges_path: Path | None = None
         i = 0
@@ -2438,7 +2438,7 @@ def dispatch_command(cmd: str) -> None:
         report_path = report_path.expanduser()
 
         if not graph_path.exists():
-            print(f"error: graph not found: {graph_path}. Run /graphify <path> first.", file=sys.stderr)
+            print(f"error: graph not found: {graph_path}. Run /repo-analyzer <path> first.", file=sys.stderr)
             sys.exit(1)
 
         if subcmd == "callflow-html":

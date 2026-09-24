@@ -25,11 +25,11 @@ def _codebuddy_install_user(tmp_path):
 
 
 def _skill_path_user(tmp_path):
-    return tmp_path / ".codebuddy" / "skills" / "graphify" / "SKILL.md"
+    return tmp_path / ".codebuddy" / "skills" / "repo-analyzer" / "SKILL.md"
 
 
 def _skill_path_project(project_dir):
-    return project_dir / ".codebuddy" / "skills" / "graphify" / "SKILL.md"
+    return project_dir / ".codebuddy" / "skills" / "repo-analyzer" / "SKILL.md"
 
 
 def _codebuddy_md_path(project_dir):
@@ -45,7 +45,7 @@ def _settings_path(project_dir):
 # ---------------------------------------------------------------------------
 
 def test_codebuddy_install_user_creates_skill_file(tmp_path):
-    """User-scope install copies skill to ~/.codebuddy/skills/graphify/SKILL.md."""
+    """User-scope install copies skill to ~/.codebuddy/skills/repo-analyzer/SKILL.md."""
     _codebuddy_install_user(tmp_path)
     skill_path = _skill_path_user(tmp_path)
     assert skill_path.exists()
@@ -55,15 +55,15 @@ def test_codebuddy_skill_file_contains_frontmatter(tmp_path):
     """Installed skill file must include graphify YAML frontmatter."""
     _codebuddy_install_user(tmp_path)
     content = _skill_path_user(tmp_path).read_text()
-    assert "name: graphify" in content
+    assert "name: repo-analyzer" in content
     assert "description:" in content
 
 
 def test_codebuddy_skill_file_references_graphify_query(tmp_path):
-    """/graphify skill must mention graphify query (query-first policy)."""
+    """/repo-analyzer skill must mention graphify query (query-first policy)."""
     _codebuddy_install_user(tmp_path)
     content = _skill_path_user(tmp_path).read_text()
-    assert "graphify query" in content or "/graphify query" in content
+    assert "graphify query" in content or "/repo-analyzer query" in content
 
 
 # ---------------------------------------------------------------------------
@@ -283,18 +283,18 @@ def test_codebuddy_in_platform_config():
 
 
 def test_codebuddy_platform_skill_destination_user_scope(tmp_path):
-    """User-scope destination must be ~/.codebuddy/skills/graphify/SKILL.md."""
+    """User-scope destination must be ~/.codebuddy/skills/repo-analyzer/SKILL.md."""
     from graphify.__main__ import _platform_skill_destination
     with patch("graphify.__main__.Path.home", return_value=tmp_path):
         dst = _platform_skill_destination("codebuddy", project=False)
-    assert dst == tmp_path / ".codebuddy" / "skills" / "graphify" / "SKILL.md"
+    assert dst == tmp_path / ".codebuddy" / "skills" / "repo-analyzer" / "SKILL.md"
 
 
 def test_codebuddy_platform_skill_destination_project_scope(tmp_path):
-    """Project-scope destination must be <project>/.codebuddy/skills/graphify/SKILL.md."""
+    """Project-scope destination must be <project>/.codebuddy/skills/repo-analyzer/SKILL.md."""
     from graphify.__main__ import _platform_skill_destination
     dst = _platform_skill_destination("codebuddy", project=True, project_dir=tmp_path)
-    assert dst == tmp_path / ".codebuddy" / "skills" / "graphify" / "SKILL.md"
+    assert dst == tmp_path / ".codebuddy" / "skills" / "repo-analyzer" / "SKILL.md"
 
 
 def test_codebuddy_in_main_help_text(capsys, monkeypatch):

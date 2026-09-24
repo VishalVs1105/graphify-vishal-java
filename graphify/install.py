@@ -69,55 +69,55 @@ def _platform_skill_destination(platform_name: str, *, project: bool = False, pr
     """Return the skill destination for a platform and scope."""
     if platform_name == "gemini":
         if project:
-            return (project_dir or Path(".")) / ".gemini" / "skills" / "graphify" / "SKILL.md"
+            return (project_dir or Path(".")) / ".gemini" / "skills" / "repo-analyzer" / "SKILL.md"
         if platform.system() == "Windows":
-            return Path.home() / ".agents" / "skills" / "graphify" / "SKILL.md"
-        return Path.home() / ".gemini" / "skills" / "graphify" / "SKILL.md"
+            return Path.home() / ".agents" / "skills" / "repo-analyzer" / "SKILL.md"
+        return Path.home() / ".gemini" / "skills" / "repo-analyzer" / "SKILL.md"
 
     if platform_name == "opencode":
         if project:
-            return (project_dir or Path(".")) / ".opencode" / "skills" / "graphify" / "SKILL.md"
-        return Path.home() / ".config" / "opencode" / "skills" / "graphify" / "SKILL.md"
+            return (project_dir or Path(".")) / ".opencode" / "skills" / "repo-analyzer" / "SKILL.md"
+        return Path.home() / ".config" / "opencode" / "skills" / "repo-analyzer" / "SKILL.md"
 
     if platform_name == "hermes":
         if project:
-            return (project_dir or Path(".")) / ".hermes" / "skills" / "graphify" / "SKILL.md"
+            return (project_dir or Path(".")) / ".hermes" / "skills" / "repo-analyzer" / "SKILL.md"
         # On Windows, Hermes scans %LOCALAPPDATA%\hermes\skills, not ~/.hermes (#1403).
         if platform.system() == "Windows":
             local_appdata = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
-            return local_appdata / "hermes" / "skills" / "graphify" / "SKILL.md"
-        return Path.home() / ".hermes" / "skills" / "graphify" / "SKILL.md"
+            return local_appdata / "hermes" / "skills" / "repo-analyzer" / "SKILL.md"
+        return Path.home() / ".hermes" / "skills" / "repo-analyzer" / "SKILL.md"
 
     if platform_name == "devin":
         if project:
-            return (project_dir or Path(".")) / ".devin" / "skills" / "graphify" / "SKILL.md"
-        return Path.home() / ".config" / "devin" / "skills" / "graphify" / "SKILL.md"
+            return (project_dir or Path(".")) / ".devin" / "skills" / "repo-analyzer" / "SKILL.md"
+        return Path.home() / ".config" / "devin" / "skills" / "repo-analyzer" / "SKILL.md"
 
     if platform_name == "amp":
         if project:
-            return (project_dir or Path(".")) / ".agents" / "skills" / "graphify" / "SKILL.md"
-        return Path.home() / ".config" / "agents" / "skills" / "graphify" / "SKILL.md"
+            return (project_dir or Path(".")) / ".agents" / "skills" / "repo-analyzer" / "SKILL.md"
+        return Path.home() / ".config" / "agents" / "skills" / "repo-analyzer" / "SKILL.md"
 
     if platform_name == "agents":
         # The generic Agent-Skills target: project ./.agents/skills, global the
         # spec's user-global ~/.agents/skills (read by `npx skills` and compliant
         # frameworks), NOT amp's ~/.config/agents/skills.
         if project:
-            return (project_dir or Path(".")) / ".agents" / "skills" / "graphify" / "SKILL.md"
-        return Path.home() / ".agents" / "skills" / "graphify" / "SKILL.md"
+            return (project_dir or Path(".")) / ".agents" / "skills" / "repo-analyzer" / "SKILL.md"
+        return Path.home() / ".agents" / "skills" / "repo-analyzer" / "SKILL.md"
 
     if platform_name in ("antigravity", "antigravity-windows"):
         if project:
-            return (project_dir or Path(".")) / ".agents" / "skills" / "graphify" / "SKILL.md"
+            return (project_dir or Path(".")) / ".agents" / "skills" / "repo-analyzer" / "SKILL.md"
         # Global Antigravity skill dir (all workspaces): ~/.gemini/config/skills/
-        return Path.home() / ".gemini" / "config" / "skills" / "graphify" / "SKILL.md"
+        return Path.home() / ".gemini" / "config" / "skills" / "repo-analyzer" / "SKILL.md"
 
     cfg = _PLATFORM_CONFIG[platform_name]
     if project:
         return (project_dir or Path(".")) / cfg["skill_dst"]
 
     if platform_name in ("claude", "windows") and os.environ.get("CLAUDE_CONFIG_DIR"):
-        return Path(os.environ["CLAUDE_CONFIG_DIR"]) / "skills" / "graphify" / "SKILL.md"
+        return Path(os.environ["CLAUDE_CONFIG_DIR"]) / "skills" / "repo-analyzer" / "SKILL.md"
     return Path.home() / cfg["skill_dst"]
 def _packaged_skill_refs_dir(platform_name: str) -> Path | None:
     """Return the packaged references source dir for a progressive platform, else None.
@@ -172,6 +172,31 @@ def _install_skill_references(skill_dst: Path, refs_src: Path) -> None:
         if refs_staged.exists():
             shutil.rmtree(refs_staged, ignore_errors=True)
         raise
+def _retire_legacy_skill(skill_dst: Path) -> None:
+    """Disable a stamped old skill after successful install, retaining a backup.
+
+    Only inspect the sibling in the same installation scope. Unstamped skills,
+    symlinks and existing backups are never overwritten or removed.
+    """
+    legacy = skill_dst.parent.parent / "graphify" / "SKILL.md"
+    if not legacy.is_file():
+        return
+    if (
+        legacy.is_symlink()
+        or legacy.parent.is_symlink()
+        or legacy.resolve().parent.parent != skill_dst.parent.parent.resolve()
+        or not (legacy.parent / ".graphify_version").is_file()
+    ):
+        print(f"  legacy skill left untouched: {legacy}; review it if /graphify remains visible")
+        return
+    backup = legacy.with_name("SKILL.md.graphify-backup")
+    if backup.exists() or backup.is_symlink():
+        print(f"  legacy skill left untouched: backup already exists at {backup}")
+        return
+    legacy.rename(backup)
+    print(f"  legacy /graphify skill backed up -> {backup}")
+
+
 def _copy_skill_file(platform_name: str, *, project: bool = False, project_dir: Path | None = None) -> Path:
     """Copy a packaged skill file and write its version stamp.
 
@@ -228,6 +253,7 @@ def _copy_skill_file(platform_name: str, *, project: bool = False, project_dir: 
 
     (skill_dst.parent / ".graphify_version").write_text(__version__, encoding="utf-8")
     print(f"  skill installed  ->  {skill_dst}")
+    _retire_legacy_skill(skill_dst)
     return skill_dst
 def _remove_skill_file(platform_name: str, *, project: bool = False, project_dir: Path | None = None) -> bool:
     """Remove a platform skill file and its version stamp without touching other scopes."""
@@ -314,126 +340,126 @@ def _claude_pretooluse_hooks(strict: bool = False) -> "list[dict]":
         {"matcher": "Read|Glob",
          "hooks": [{"type": "command", "command": read_cmd}]},
     ]
-def _skill_registration(skill_path: str = "~/.claude/skills/graphify/SKILL.md") -> str:
+def _skill_registration(skill_path: str = "~/.claude/skills/repo-analyzer/SKILL.md") -> str:
     return (
         "\n# graphify\n"
-        f"- **graphify** (`{skill_path}`) "
-        "- any input to knowledge graph. Trigger: `/graphify`\n"
-        "When the user types `/graphify`, use the installed graphify skill "
+        f"- **repo-analyzer** (`{skill_path}`) "
+        "- any input to knowledge graph. Trigger: `/repo-analyzer`\n"
+        "When the user types `/repo-analyzer`, use the installed repo-analyzer skill "
         "or instructions before doing anything else.\n"
     )
 _PLATFORM_CONFIG: dict[str, dict] = {
     "claude": {
         "skill_file": "skill.md",
-        "skill_dst": Path(".claude") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".claude") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": True,
         "skill_refs": "claude",
     },
     "codex": {
         "skill_file": "skill-codex.md",
-        "skill_dst": Path(".codex") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".codex") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "codex",
     },
     "opencode": {
         "skill_file": "skill-opencode.md",
-        "skill_dst": Path(".config") / "opencode" / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".config") / "opencode" / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "opencode",
     },
     "kilo": {
         "skill_file": "skill-kilo.md",
-        "skill_dst": Path(".config") / "kilo" / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".config") / "kilo" / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "kilo",
     },
     "aider": {
         # Monolith: aider ships the full SKILL.md inline, no references/ sidecar.
         "skill_file": "skill-aider.md",
-        "skill_dst": Path(".aider") / "graphify" / "SKILL.md",
+        "skill_dst": Path(".aider") / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
     },
     "copilot": {
         "skill_file": "skill-copilot.md",
-        "skill_dst": Path(".copilot") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".copilot") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "copilot",
     },
     "claw": {
         "skill_file": "skill-claw.md",
-        "skill_dst": Path(".openclaw") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".openclaw") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "claw",
     },
     "droid": {
         "skill_file": "skill-droid.md",
-        "skill_dst": Path(".factory") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".factory") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "droid",
     },
     "trae": {
         "skill_file": "skill-trae.md",
-        "skill_dst": Path(".trae") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".trae") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "trae",
     },
     "trae-cn": {
         # Reuses trae's split bundle (same skill body + references).
         "skill_file": "skill-trae.md",
-        "skill_dst": Path(".trae-cn") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".trae-cn") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "trae",
     },
     "hermes": {
         # Reuses claw's split bundle.
         "skill_file": "skill-claw.md",
-        "skill_dst": Path(".hermes") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".hermes") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "claw",
     },
     "kiro": {
         "skill_file": "skill-kiro.md",
-        "skill_dst": Path(".kiro") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".kiro") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "kiro",
     },
     "pi": {
         "skill_file": "skill-pi.md",
-        "skill_dst": Path(".pi") / "agent" / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".pi") / "agent" / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "pi",
     },
     "codebuddy": {
         # Reuses claude's split bundle (shares skill.md).
         "skill_file": "skill.md",
-        "skill_dst": Path(".codebuddy") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".codebuddy") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "claude",
     },
     "antigravity": {
         # Rides claude's split bundle (shares skill.md).
         "skill_file": "skill.md",
-        "skill_dst": Path(".agents") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".agents") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "claude",
     },
     "antigravity-windows": {
         # Rides windows' split bundle.
         "skill_file": "skill-windows.md",
-        "skill_dst": Path(".agents") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".agents") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "windows",
     },
     "windows": {
         "skill_file": "skill-windows.md",
-        "skill_dst": Path(".claude") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".claude") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": True,
         "skill_refs": "windows",
     },
     "kimi": {
         # Reuses claude's split bundle (shares skill.md).
         "skill_file": "skill.md",
-        "skill_dst": Path(".kimi") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".kimi") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "claude",
     },
@@ -441,7 +467,7 @@ _PLATFORM_CONFIG: dict[str, dict] = {
         # Amp searches .agents/skills (project) and ~/.config/agents/skills (user),
         # not .amp/skills. The user-scope path is set in _platform_skill_destination.
         "skill_file": "skill-amp.md",
-        "skill_dst": Path(".agents") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".agents") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "amp",
     },
@@ -451,16 +477,16 @@ _PLATFORM_CONFIG: dict[str, dict] = {
         # frameworks); project: ./.agents/skills. The CLI accepts `skills` as an
         # alias (see _canonical_platform). Ships its own rendered bundle.
         "skill_file": "skill-agents.md",
-        "skill_dst": Path(".agents") / "skills" / "graphify" / "SKILL.md",
+        "skill_dst": Path(".agents") / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
         "skill_refs": "agents",
     },
     "devin": {
         # Monolith: devin ships the full SKILL.md inline, no references/ sidecar.
         "skill_file": "skill-devin.md",
-        # User scope: ~/.config/devin/skills/graphify/SKILL.md
-        # Project scope: .devin/skills/graphify/SKILL.md (overridden in _platform_skill_destination)
-        "skill_dst": Path(".config") / "devin" / "skills" / "graphify" / "SKILL.md",
+        # User scope: ~/.config/devin/skills/repo-analyzer/SKILL.md
+        # Project scope: .devin/skills/repo-analyzer/SKILL.md (overridden in _platform_skill_destination)
+        "skill_dst": Path(".config") / "devin" / "skills" / "repo-analyzer" / "SKILL.md",
         "claude_md": False,
     },
 }
@@ -611,7 +637,7 @@ def install(platform: str = "claude", *, project: bool = False, project_dir: Pat
     skill_dst = _copy_skill_file(platform, project=project, project_dir=project_dir)
 
     if platform == "kilo":
-        # Kilo Code also supports a native /graphify command file.
+        # Kilo Code also supports a native /repo-analyzer command file.
         command_src = Path(__file__).parent / "command-kilo.md"
         if not command_src.exists():
             print(
@@ -619,7 +645,7 @@ def install(platform: str = "claude", *, project: bool = False, project_dir: Pat
                 file=sys.stderr,
             )
             sys.exit(1)
-        command_dst = Path.home() / ".config" / "kilo" / "command" / "graphify.md"
+        command_dst = Path.home() / ".config" / "kilo" / "command" / "repo-analyzer.md"
         command_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(command_src, command_dst)
         print(f"  command installed ->  {command_dst}")
@@ -627,7 +653,7 @@ def install(platform: str = "claude", *, project: bool = False, project_dir: Pat
     if cfg["claude_md"]:
         # Register in the matching Claude Code scope.
         claude_md = (project_dir / ".claude" / "CLAUDE.md") if project else Path.home() / ".claude" / "CLAUDE.md"
-        registration = _skill_registration(".claude/skills/graphify/SKILL.md" if project else "~/.claude/skills/graphify/SKILL.md")
+        registration = _skill_registration(".claude/skills/repo-analyzer/SKILL.md" if project else "~/.claude/skills/repo-analyzer/SKILL.md")
         if claude_md.exists():
             content = claude_md.read_text(encoding="utf-8")
             if "graphify" in content:
@@ -643,7 +669,7 @@ def install(platform: str = "claude", *, project: bool = False, project_dir: Pat
     if platform == "codebuddy":
         # Register in ~/.codebuddy/CODEBUDDY.md (CodeBuddy only)
         codebuddy_md = Path.home() / ".codebuddy" / "CODEBUDDY.md"
-        registration = _skill_registration("~/.codebuddy/skills/graphify/SKILL.md")
+        registration = _skill_registration("~/.codebuddy/skills/repo-analyzer/SKILL.md")
         if codebuddy_md.exists():
             content = codebuddy_md.read_text(encoding="utf-8")
             if "graphify" in content:
@@ -669,7 +695,7 @@ def install(platform: str = "claude", *, project: bool = False, project_dir: Pat
     print()
     print("Done. Open your AI coding assistant and type:")
     print()
-    print("  /graphify .")
+    print("  /repo-analyzer .")
     print()
 def _print_install_usage() -> None:
     platforms = ", ".join([*_PLATFORM_CONFIG, "gemini", "cursor"])
@@ -833,7 +859,7 @@ def vscode_install(project_dir: Path | None = None) -> None:
     if not skill_src.exists():
         skill_src = Path(__file__).parent / "skill-copilot.md"
         refs_bundle = "copilot"
-    skill_dst = Path.home() / ".copilot" / "skills" / "graphify" / "SKILL.md"
+    skill_dst = Path.home() / ".copilot" / "skills" / "repo-analyzer" / "SKILL.md"
     skill_dst.parent.mkdir(parents=True, exist_ok=True)
     tmp_dst = skill_dst.with_suffix(skill_dst.suffix + ".tmp")
     try:
@@ -856,6 +882,7 @@ def vscode_install(project_dir: Path | None = None) -> None:
             shutil.rmtree(orphan_refs)
     (skill_dst.parent / ".graphify_version").write_text(__version__, encoding="utf-8")
     print(f"  skill installed  ->  {skill_dst}")
+    _retire_legacy_skill(skill_dst)
 
     instructions = (project_dir or Path(".")) / ".github" / "copilot-instructions.md"
     instructions.parent.mkdir(parents=True, exist_ok=True)
@@ -875,12 +902,12 @@ def vscode_install(project_dir: Path | None = None) -> None:
 
     print()
     print(
-        "VS Code Copilot Chat configured. Type /graphify in the chat panel to build the graph."
+        "VS Code Copilot Chat configured. Type /repo-analyzer in the chat panel to build the graph."
     )
     print("Note: for GitHub Copilot CLI (terminal), use: graphify copilot install")
 def vscode_uninstall(project_dir: Path | None = None) -> None:
     """Remove graphify VS Code Copilot Chat skill and .github/copilot-instructions.md section."""
-    skill_dst = Path.home() / ".copilot" / "skills" / "graphify" / "SKILL.md"
+    skill_dst = Path.home() / ".copilot" / "skills" / "repo-analyzer" / "SKILL.md"
     if skill_dst.exists():
         skill_dst.unlink()
         print(f"  skill removed    ->  {skill_dst}")
@@ -914,19 +941,19 @@ def vscode_uninstall(project_dir: Path | None = None) -> None:
         instructions.unlink()
         print(f"  {instructions}  ->  deleted (was empty after removal)")
 _ANTIGRAVITY_RULES_PATH = Path(".agents") / "rules" / "graphify.md"
-_ANTIGRAVITY_WORKFLOW_PATH = Path(".agents") / "workflows" / "graphify.md"
+_ANTIGRAVITY_WORKFLOW_PATH = Path(".agents") / "workflows" / "repo-analyzer.md"
 # Names no SKILL.md location on purpose: this constant is shared by the global and
 # project-scoped installs, which put the skill in different places, so any hardcoded
 # path dangles for the other scope. Antigravity resolves the skill by frontmatter name.
 _ANTIGRAVITY_WORKFLOW = """\
 ---
-name: graphify
+name: repo-analyzer
 description: Turn any folder of files into a navigable knowledge graph
 ---
 
-# Workflow: graphify
+# Workflow: repo-analyzer
 
-Follow the graphify skill to run the full pipeline.
+Follow the repo-analyzer skill to run the full pipeline.
 
 If no path argument is given, use `.` (current directory).
 """
@@ -955,7 +982,7 @@ def _kiro_install(project_dir: Path) -> None:
 
     print()
     print("Kiro will now read the knowledge graph before every conversation.")
-    print("Use /graphify to build or update the graph.")
+    print("Use /repo-analyzer to build or update the graph.")
 def _kiro_uninstall(project_dir: Path) -> None:
     """Remove graphify skill + steering file for Kiro."""
     project_dir = project_dir or Path(".")
@@ -976,7 +1003,7 @@ def _antigravity_finalize(skill_dst: Path, project_dir: Path) -> None:
     """Write Antigravity's always-on layer next to an installed skill.
 
     Injects the native tool-discovery YAML frontmatter into *skill_dst*, then
-    writes ``.agents/rules/graphify.md`` and ``.agents/workflows/graphify.md``
+    writes ``.agents/rules/graphify.md`` and ``.agents/workflows/repo-analyzer.md``
     under *project_dir*. Shared by the global ``antigravity install`` and the
     project-scoped ``install --project --platform antigravity`` paths, so both lay
     down the rules/workflows that the uninstall path already expects to remove.
@@ -985,7 +1012,7 @@ def _antigravity_finalize(skill_dst: Path, project_dir: Path) -> None:
     if skill_dst.exists():
         content = skill_dst.read_text(encoding="utf-8")
         if not content.startswith("---\n"):
-            frontmatter = "---\nname: graphify-manager\ndescription: Rebuild the code graph or perform manual CLI queries when MCP server is offline.\n---\n\n"
+            frontmatter = "---\nname: repo-analyzer\ndescription: Rebuild the code graph or perform manual CLI queries when MCP server is offline.\n---\n\n"
             skill_dst.write_text(frontmatter + content, encoding="utf-8")
 
     # .agents/rules/graphify.md
@@ -1002,7 +1029,7 @@ def _antigravity_finalize(skill_dst: Path, project_dir: Path) -> None:
         rules_path.write_text(_always_on("antigravity-rules"), encoding="utf-8")
         print(f"graphify rule written to {rules_path.resolve()}")
 
-    # .agents/workflows/graphify.md
+    # .agents/workflows/repo-analyzer.md
     wf_path = project_dir / _ANTIGRAVITY_WORKFLOW_PATH
     wf_path.parent.mkdir(parents=True, exist_ok=True)
     if wf_path.exists():
@@ -1017,14 +1044,14 @@ def _antigravity_finalize(skill_dst: Path, project_dir: Path) -> None:
         print(f"graphify workflow written to {wf_path.resolve()}")
 def _antigravity_install(project_dir: Path) -> None:
     """Install graphify for Google Antigravity (global skill + .agents/rules + .agents/workflows)."""
-    # Copy the skill to ~/.gemini/config/skills/graphify/SKILL.md (global), then
+    # Copy the skill to ~/.gemini/config/skills/repo-analyzer/SKILL.md (global), then
     # lay down the always-on rules/workflows under the project dir.
     install(platform="antigravity")
     _antigravity_finalize(_platform_skill_destination("antigravity"), project_dir)
 
     print()
     print("Antigravity will now check the knowledge graph before answering")
-    print("codebase questions. Run /graphify first to build the graph.")
+    print("codebase questions. Run /repo-analyzer first to build the graph.")
     print()
     print(
         "To enable full MCP architecture navigation, add this to ~/.gemini/antigravity/mcp_config.json:"
@@ -1109,7 +1136,7 @@ def _cursor_install(project_dir: Path) -> None:
     print(f"graphify rule {action} at {rule_path.resolve()}")
     print()
     print("Cursor will now always include the knowledge graph context.")
-    print("Run /graphify . first to build the graph if you haven't already.")
+    print("Run /repo-analyzer . first to build the graph if you haven't already.")
 def _cursor_uninstall(project_dir: Path) -> None:
     """Remove .cursor/rules/graphify.mdc."""
     rule_path = (project_dir or Path(".")) / _CURSOR_RULE_PATH
@@ -1579,7 +1606,7 @@ def _project_install(platform_name: str, project_dir: Path | None = None, strict
         _print_project_git_add_hint([_project_scope_root(skill_dst, project_dir), project_dir / ".agents"])
     elif platform_name in ("copilot", "pi", "kimi", "agents"):
         # Skill-only project install: drop SKILL.md (+ references) at the scope
-        # root. `agents` -> ./.agents/skills/graphify/SKILL.md.
+        # root. `agents` -> ./.agents/skills/repo-analyzer/SKILL.md.
         skill_dst = _copy_skill_file(platform_name, project=True, project_dir=project_dir)
         _print_project_git_add_hint([_project_scope_root(skill_dst, project_dir)])
     else:
@@ -1664,7 +1691,7 @@ def _agents_uninstall(project_dir: Path, platform: str = "") -> None:
         _uninstall_kilo_plugin(project_dir or Path("."))
 def _kilo_uninstall_global() -> list[str]:
     removed = []
-    command_dst = Path.home() / ".config" / "kilo" / "command" / "graphify.md"
+    command_dst = Path.home() / ".config" / "kilo" / "command" / "repo-analyzer.md"
     if command_dst.exists():
         command_dst.unlink()
         removed.append(f"command removed: {command_dst}")

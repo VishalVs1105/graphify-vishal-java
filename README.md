@@ -6,6 +6,10 @@ Graphify Java reads Java backend source and builds a persistent, source-linked g
 
 This is the Java-focused fork of Graphify. The distribution is named **graphifyy**; the executable is **graphify**. Install from this fork to avoid accidentally running the upstream package.
 
+The agent skill is now **repo-analyzer**: use `/repo-analyzer` in agent chat. Terminal commands remain `graphify`, and existing `graphify-out/graph.json` files remain compatible. This is an agent rename, not a change to Java extraction or graph formats.
+
+After installing this branch, run `graphify copilot install` (or `graphify vscode install`) and restart the agent session. The skill is installed under `skills/repo-analyzer/SKILL.md`. A stamped legacy sibling skill is disabled by renaming its entrypoint to `SKILL.md.graphify-backup`; its contents and references remain recoverable. Unstamped/custom installs and existing backups are left untouched with a notice. Other scopes and manually installed old command/workflow files may still expose `/graphify`; review those explicitly rather than deleting unrelated files.
+
 ## Priorities and guarantees
 
 1. Preserve Java syntax evidence and resolve call targets conservatively.
@@ -23,7 +27,7 @@ For this development branch:
 
 ```powershell
 uv tool uninstall graphifyy
-uv tool install --force --from "git+https://github.com/VishalVs1105/graphify-vishal-java.git@codex/java-api-docs-accuracy" graphifyy
+uv tool install --force --from "git+https://github.com/VishalVs1105/graphify-vishal-java.git@codex/repo-analyzer-agent" graphifyy
 graphify --version
 ```
 
@@ -32,7 +36,7 @@ The uninstall step is only needed if a previous uv tool installation exists. If 
 For local development:
 
 ```powershell
-git clone --branch codex/java-api-docs-accuracy https://github.com/VishalVs1105/graphify-vishal-java.git
+git clone --branch codex/repo-analyzer-agent https://github.com/VishalVs1105/graphify-vishal-java.git
 cd graphify-vishal-java
 uv venv
 uv pip install -e .
@@ -104,9 +108,9 @@ Use copilot for Copilot CLI, vscode for the repository's VS Code integration. In
 Example chat requests:
 
 ```text
-/graphify .
-/graphify api-docs
-/graphify query Explain POST /orders and its failure conditions
+/repo-analyzer .
+/repo-analyzer api-docs
+/repo-analyzer query Explain POST /orders and its failure conditions
 ```
 
 For API documentation, ask the agent to run the api-docs command against the chosen graph. It may then explain the reference in the style you need. **There are no developer/BSA modes or --audience options.** The extraction and graph evidence do not depend on the intended audience.

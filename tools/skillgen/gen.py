@@ -107,7 +107,7 @@ ALWAYS_ON_SANCTIONED_EDITS: dict[str, tuple[tuple[str, str], ...]] = {
         (
             "When the user types `/graphify`, invoke the `skill` tool with "
             '`skill: "graphify"` before doing anything else.',
-            "When the user types `/graphify`, use the installed graphify skill or instructions "
+            "When the user types `/repo-analyzer`, use the installed repo-analyzer skill or instructions "
             "before doing anything else.",
         ),
     ),
@@ -158,7 +158,7 @@ _HOOKS_SOURCE = {
 _TRAE_PRETOOLUSE_NOTE = (
     "\n> **Note:** Unlike Claude Code, Trae does NOT support PreToolUse hooks. "
     "The AGENTS.md rules are the always-on mechanism — there is no automatic graph "
-    "rebuild on tool use. Run `/graphify --update` manually after code changes if "
+    "rebuild on tool use. Run `/repo-analyzer --update` manually after code changes if "
     "the graph needs refreshing.\n"
 )
 _AGENTS_MD_HOOKS: dict[str, dict[str, str]] = {
@@ -267,7 +267,7 @@ class Platform:
     # split-only template inputs
     core: str | None = None
     refs_dst: str | None = None
-    name: str = "graphify"
+    name: str = "repo-analyzer"
     description: str | None = None
     trigger: str | None = None  # removed — not part of Agent Skills spec (#1180)
     dispatch: str | None = None
@@ -303,7 +303,7 @@ def load_platforms() -> dict[str, Platform]:
             skill_dst=cfg["skill_dst"],
             core=cfg.get("core"),
             refs_dst=cfg.get("refs_dst"),
-            name=cfg.get("name", "graphify"),
+            name=cfg.get("name", "repo-analyzer"),
             description=cfg.get("description"),
             trigger=cfg.get("trigger"),
             dispatch=cfg.get("dispatch"),
